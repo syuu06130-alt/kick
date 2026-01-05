@@ -1,10 +1,10 @@
 --[[
-    Syu_hub v6.0 | Blobman Auto Grab & Throw Loop
+    Syu_hub v7.0 | Blobman High-Speed Kidnap & Yeet
     Target: Fling Things and People
-    完全修正版
+    Logic: Teleport -> Auto Grab -> Teleport Back -> Throw
 ]]
 
--- Services
+-- ■■■ Services ■■■
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -12,25 +12,24 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
--- Variables
+-- ■■■ Variables ■■■
 local TargetPlayer = nil
 local IsLoopKicking = false
 local IsAllKicking = false
 local OriginalPosition = nil
-local BlobmanTool = nil
+local minimizeLevel = 0
 
--- Notification
-local function Notify(msg)
+-- ■■■ Utility Functions ■■■
+function SendNotif(title, content)
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Syu_hub";
-        Text = msg;
-        Duration = 3;
+        Title = title;
+        Text = content;
+        Duration = 2;
     })
-    print("[Syu_hub] " .. msg)
+    print("[" .. title .. "] " .. content)
 end
 
--- Get Player List
-local function GetPlayerNames()
+function GetPlayerNames()
     local names = {}
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
@@ -40,392 +39,343 @@ local function GetPlayerNames()
     return names
 end
 
--- Spawn Blobman from Toy category
-local function SpawnBlobman()
-    -- Fling Things and Peopleのスポーンリモートを探す
-    local success = pcall(function()
-        local args = {
-            [1] = workspace.Spawn,
-            [2] = "Blobman"
-        }
-        -- よくあるパターン
-        if ReplicatedStorage:FindFirstChild("SpawnItem") then
-            ReplicatedStorage.SpawnItem:FireServer(unpack(args))
-        elseif ReplicatedStorage:FindFirstChild("RE") then
-            ReplicatedStorage.RE:FireServer("SpawnItem", "Blobman")
+-- ブロブマン（弾薬）を探す
+function FindBlobman()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local nearest, dist = nil, 500
+    for _, v in pairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and (v.Name == "Blobman" or v.Name == "Ragdoll" or v.Name == "OddBlobman") then
+            local part = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Torso") or v.PrimaryPart
+            if part and not Players:GetPlayerFromCharacter(v) then
+                local d = (part.Position - hrp.Position).Magnitude
+                if d < dist then
+                    dist = d
+                    nearest = v
+                end
+            end
         end
-    end)
+    end
+    return nearest
+end
+
+-- ブロブマンを強制スポーンさせる
+function SpawnBlobman()
+    local args = { [1] = "Blobman" }
+    local remotesToTry = {
+        "SpawnItem", "CreateItem", "SpawnObject", "RequestSpawn", "ItemSpawn"
+    }
     
-    if success then
-        Notify("Blobmanをスポーンしました")
-        wait(0.5)
-        -- スポーンしたBlobmanを探して装備
-        for _, v in pairs(workspace:GetDescendants()) do
-            if v.Name == "Blobman" and v:IsA("Tool") then
-                v.Parent = LocalPlayer.Backpack
-                BlobmanTool = v
-                break
+    local spawned = false
+    -- ReplicatedStorage内を全検索
+    for _, desc in pairs(ReplicatedStorage:GetDescendants()) do
+        if desc:IsA("RemoteEvent") and (string.find(desc.Name, "Spawn") or string.find(desc.Name, "Create")) then
+             pcall(function()
+                desc:FireServer(unpack(args))
+                spawned = true
+             end)
+        end
+    end
+    
+    if spawned then
+        SendNotif("System", "Spawnリクエスト送信完了")
+    else
+        SendNotif("Error", "Spawnリモートが見つかりません")
+    end
+end
+
+-- ゲーム内の「掴み」を実行する関数（汎用的な名前で試行）
+function TryGrab(targetModel)
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    -- 手（RightHandなど）を探す
+    local hand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+    local targetPart = targetModel:FindFirstChild("HumanoidRootPart") or targetModel:FindFirstChild("Torso")
+    
+    if hand and targetPart then
+        -- 一般的なGrab系Remoteを探して発火
+        for _, remote in pairs(ReplicatedStorage:GetDescendants()) do
+            if remote:IsA("RemoteEvent") and (string.find(remote.Name, "Grab") or string.find(remote.Name, "Interact")) then
+                pcall(function()
+                    remote:FireServer(targetPart)
+                end)
             end
         end
     end
 end
 
--- Grab and Throw Loop
-local function GrabThrowLoop(targetName)
+-- ■■■ 攻撃ロジック（掴んで戻って投げる） ■■■
+function TeleportGrabAndThrow(targetName)
     local target = Players:FindFirstChild(targetName)
-    if not target or not target.Character then return end
-    
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
     
     local myHrp = char.HumanoidRootPart
-    local targetHrp = target.Character:FindFirstChild("HumanoidRootPart")
-    if not targetHrp then return end
+    local targetHrp = target.Character.HumanoidRootPart
     
-    -- 元の位置を保存
+    -- 1. 元の場所を記録
     if not OriginalPosition then
         OriginalPosition = myHrp.CFrame
     end
-    
-    -- Blobmanがなければスポーン
-    if not BlobmanTool or not BlobmanTool.Parent then
+
+    -- 2. ブロブマン確保（なければ出す）
+    local ammo = FindBlobman()
+    if not ammo then
         SpawnBlobman()
-        wait(0.3)
+        RunService.Heartbeat:Wait() -- 1フレーム待つ
+        ammo = FindBlobman()
     end
     
-    -- Blobmanを装備
-    if BlobmanTool and BlobmanTool.Parent == LocalPlayer.Backpack then
-        char.Humanoid:EquipTool(BlobmanTool)
-        wait(0.1)
-    end
-    
-    -- ターゲットにTP
-    myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
-    wait(0.01)
-    
-    -- 掴む→投げるループ
-    for i = 1, 5 do
-        if not (IsLoopKicking or IsAllKicking) then break end
-        
-        -- 掴む動作（物理的に近づける）
-        myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1)
-        
-        -- Blobmanで掴む
-        if BlobmanTool and BlobmanTool:FindFirstChild("Handle") then
-            BlobmanTool.Handle.CFrame = targetHrp.CFrame
-            -- 掴むアクション
-            if BlobmanTool:FindFirstChild("MouseClick") then
-                BlobmanTool.MouseClick:Fire()
-            end
-        end
-        
-        wait(0.01)
-        
-        -- 投げる動作
-        myHrp.Velocity = (targetHrp.Position - myHrp.Position).Unit * 500
-        
-        -- Unequip して投げる
-        if BlobmanTool then
-            char.Humanoid:UnequipTools()
-        end
-        
-        wait(0.01)
-        
-        -- 再装備
-        if BlobmanTool and BlobmanTool.Parent == LocalPlayer.Backpack then
-            char.Humanoid:EquipTool(BlobmanTool)
+    -- もしブロブマンがあれば、まずそれを掴みに行く
+    if ammo then
+        local ammoPart = ammo:FindFirstChild("HumanoidRootPart") or ammo.PrimaryPart
+        if ammoPart then
+            myHrp.CFrame = ammoPart.CFrame
+            TryGrab(ammo) -- ブロブマンを掴む試行
+            RunService.Heartbeat:Wait()
         end
     end
+
+    -- 3. ターゲットへ瞬間移動 (0.01秒相当の速さ)
+    myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1) -- 相手の少し後ろ
     
-    -- 元の位置に戻る
-    myHrp.CFrame = OriginalPosition
-    myHrp.Velocity = Vector3.new(0, 0, 0)
+    -- 4. 掴み処理 (Grab)
+    TryGrab(target.Character) -- 相手を掴む試行
+    
+    -- 物理的にくっつける（Grabが効かない場合の保険）
+    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+        ammo.HumanoidRootPart.CFrame = targetHrp.CFrame -- ブロブマンを相手に重ねる
+    end
+    
+    -- 待機 (0.01s)
+    local start = os.clock()
+    while os.clock() - start < 0.01 do
+        RunService.Heartbeat:Wait()
+    end
+    
+    -- 5. 元の場所へ戻る (Teleport Back)
+    if OriginalPosition then
+        myHrp.CFrame = OriginalPosition
+    end
+    
+    -- 6. 投げる (Throw / Release)
+    -- 回転力を加えて離す
+    myHrp.Velocity = (myHrp.CFrame.LookVector) * 100
+    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+         ammo.HumanoidRootPart.Velocity = (myHrp.CFrame.LookVector) * 300
+    end
+    
+    -- Grab解除のリモートがあればここで送る（省略：多くの場合は離れれば外れるか、Releaseリモートが必要）
+    for _, remote in pairs(ReplicatedStorage:GetDescendants()) do
+        if remote:IsA("RemoteEvent") and (string.find(remote.Name, "Release") or string.find(remote.Name, "Drop")) then
+            pcall(function() remote:FireServer() end)
+        end
+    end
+    
+    -- 待機 (0.01s)
+    start = os.clock()
+    while os.clock() - start < 0.01 do
+        RunService.Heartbeat:Wait()
+    end
 end
 
--- UI作成
-wait(1) -- キャラクターロード待機
-
+-- ■■■ UI Construction ■■■
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SyuHubUI"
+ScreenGui.Name = "SyuHubFixedV7"
 ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
--- PlayerGuiに配置
-if LocalPlayer:FindFirstChild("PlayerGui") then
-    ScreenGui.Parent = LocalPlayer.PlayerGui
-else
-    ScreenGui.Parent = game.CoreGui
+if game.CoreGui:FindFirstChild("SyuHubFixedV7") then
+    game.CoreGui.SyuHubFixedV7:Destroy()
 end
+ScreenGui.Parent = game.CoreGui
 
 -- メインフレーム
 local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 350, 0, 450)
-MainFrame.Position = UDim2.new(0.5, -175, 0.5, -225)
+MainFrame.Size = UDim2.new(0, 320, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -160, 0.3, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-MainFrame.BorderSizePixel = 2
-MainFrame.BorderColor3 = Color3.fromRGB(100, 100, 100)
-MainFrame.Active = true
-MainFrame.Draggable = true -- これで自動的にドラッグ可能
+MainFrame.BorderSizePixel = 0
 MainFrame.Parent = ScreenGui
 
 local Corner = Instance.new("UICorner")
 Corner.CornerRadius = UDim.new(0, 10)
 Corner.Parent = MainFrame
 
--- タイトルバー
-local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 35)
-TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-TitleBar.BorderSizePixel = 0
-TitleBar.Parent = MainFrame
-
+-- タイトル
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -80, 1, 0)
-TitleLabel.Position = UDim2.new(0, 10, 0, 0)
-TitleLabel.Text = "🎯 Syu_hub v6.0"
-TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.Size = UDim2.new(1, 0, 0, 40)
 TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "Syu_hub v7.0 (Fast Grab)"
+TitleLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
 TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 16
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-TitleLabel.Parent = TitleBar
+TitleLabel.TextSize = 20
+TitleLabel.Parent = MainFrame
 
--- 閉じるボタン
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-CloseBtn.Position = UDim2.new(1, -35, 0, 2.5)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.new(1, 1, 1)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 16
-CloseBtn.Parent = TitleBar
-
-local CloseCorner = Instance.new("UICorner")
-CloseCorner.CornerRadius = UDim.new(0, 5)
-CloseCorner.Parent = CloseBtn
-
-CloseBtn.MouseButton1Click:Connect(function()
-    IsLoopKicking = false
-    IsAllKicking = false
-    ScreenGui:Destroy()
-    Notify("UIを閉じました")
-end)
-
--- スクロールフレーム
+-- コンテンツ
 local ScrollFrame = Instance.new("ScrollingFrame")
-ScrollFrame.Size = UDim2.new(1, -20, 1, -45)
-ScrollFrame.Position = UDim2.new(0, 10, 0, 40)
+ScrollFrame.Size = UDim2.new(1, -20, 1, -50)
+ScrollFrame.Position = UDim2.new(0, 10, 0, 45)
 ScrollFrame.BackgroundTransparency = 1
-ScrollFrame.BorderSizePixel = 0
-ScrollFrame.ScrollBarThickness = 6
-ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 550)
 ScrollFrame.Parent = MainFrame
 
--- ボタン作成関数
-local yPos = 10
-local function CreateButton(text, callback, color)
+-- UI要素作成ヘルパー
+local function CreateBtn(text, order, callback, toggle)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -10, 0, 45)
-    btn.Position = UDim2.new(0, 5, 0, yPos)
+    btn.Size = UDim2.new(1, 0, 0, 35)
+    btn.Position = UDim2.new(0, 0, 0, (order - 1) * 45)
     btn.Text = text
-    btn.TextColor3 = Color3.new(1, 1, 1)
-    btn.BackgroundColor3 = color or Color3.fromRGB(50, 50, 60)
-    btn.Font = Enum.Font.GothamBold
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.Gotham
     btn.TextSize = 14
     btn.Parent = ScrollFrame
     
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 8)
-    corner.Parent = btn
+    local c = Instance.new("UICorner")
+    c.Parent = btn
     
-    btn.MouseButton1Click:Connect(callback)
-    
-    yPos = yPos + 50
+    btn.MouseButton1Click:Connect(function()
+        callback(btn)
+    end)
     return btn
 end
 
--- プレイヤー選択
-local PlayerLabel = Instance.new("TextLabel")
-PlayerLabel.Size = UDim2.new(1, -10, 0, 25)
-PlayerLabel.Position = UDim2.new(0, 5, 0, yPos)
-PlayerLabel.Text = "ターゲット選択:"
-PlayerLabel.TextColor3 = Color3.new(1, 1, 1)
-PlayerLabel.BackgroundTransparency = 1
-PlayerLabel.Font = Enum.Font.GothamBold
-PlayerLabel.TextSize = 14
-PlayerLabel.TextXAlignment = Enum.TextXAlignment.Left
-PlayerLabel.Parent = ScrollFrame
-yPos = yPos + 30
+-- ターゲット入力欄
+local TargetBox = Instance.new("TextBox")
+TargetBox.Size = UDim2.new(1, 0, 0, 35)
+TargetBox.PlaceholderText = "Target Name (Partial works)"
+TargetBox.Text = ""
+TargetBox.BackgroundColor3 = Color3.fromRGB(30,30,30)
+TargetBox.TextColor3 = Color3.new(1,1,1)
+TargetBox.Parent = ScrollFrame
+local tbc = Instance.new("UICorner")
+tbc.Parent = TargetBox
 
-local PlayerDropdown = Instance.new("TextButton")
-PlayerDropdown.Size = UDim2.new(1, -10, 0, 40)
-PlayerDropdown.Position = UDim2.new(0, 5, 0, yPos)
-PlayerDropdown.Text = "▼ クリックして選択"
-PlayerDropdown.TextColor3 = Color3.new(1, 1, 1)
-PlayerDropdown.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-PlayerDropdown.Font = Enum.Font.Gotham
-PlayerDropdown.TextSize = 13
-PlayerDropdown.Parent = ScrollFrame
-
-local DropCorner = Instance.new("UICorner")
-DropCorner.CornerRadius = UDim.new(0, 6)
-DropCorner.Parent = PlayerDropdown
-
-yPos = yPos + 45
-
--- ドロップダウンメニュー
-local DropMenu = Instance.new("Frame")
-DropMenu.Size = UDim2.new(1, -10, 0, 0)
-DropMenu.Position = UDim2.new(0, 5, 0, yPos)
-DropMenu.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-DropMenu.BorderSizePixel = 1
-DropMenu.BorderColor3 = Color3.fromRGB(70, 70, 70)
-DropMenu.Visible = false
-DropMenu.ClipsDescendants = true
-DropMenu.Parent = ScrollFrame
-
-local DropScroll = Instance.new("ScrollingFrame")
-DropScroll.Size = UDim2.new(1, 0, 1, 0)
-DropScroll.BackgroundTransparency = 1
-DropScroll.BorderSizePixel = 0
-DropScroll.ScrollBarThickness = 4
-DropScroll.Parent = DropMenu
-
-local DropLayout = Instance.new("UIListLayout")
-DropLayout.SortOrder = Enum.SortOrder.LayoutOrder
-DropLayout.Padding = UDim.new(0, 2)
-DropLayout.Parent = DropScroll
-
-local function UpdatePlayers()
-    for _, v in pairs(DropScroll:GetChildren()) do
-        if v:IsA("TextButton") then v:Destroy() end
-    end
-    
-    local players = GetPlayerNames()
-    for _, name in ipairs(players) do
-        local pbtn = Instance.new("TextButton")
-        pbtn.Size = UDim2.new(1, -5, 0, 30)
-        pbtn.Text = name
-        pbtn.TextColor3 = Color3.new(1, 1, 1)
-        pbtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-        pbtn.Font = Enum.Font.Gotham
-        pbtn.TextSize = 12
-        pbtn.Parent = DropScroll
-        
-        pbtn.MouseButton1Click:Connect(function()
-            TargetPlayer = name
-            PlayerDropdown.Text = "✓ " .. name
-            DropMenu.Visible = false
-            Notify("選択: " .. name)
-        end)
-    end
-    
-    DropScroll.CanvasSize = UDim2.new(0, 0, 0, #players * 32)
-end
-
-local dropOpen = false
-PlayerDropdown.MouseButton1Click:Connect(function()
-    dropOpen = not dropOpen
-    if dropOpen then
-        UpdatePlayers()
-        DropMenu.Visible = true
-        DropMenu:TweenSize(UDim2.new(1, -10, 0, 150), "Out", "Quad", 0.2, true)
-    else
-        DropMenu:TweenSize(UDim2.new(1, -10, 0, 0), "Out", "Quad", 0.2, true, function()
-            DropMenu.Visible = false
-        end)
+-- ターゲット検索
+TargetBox.FocusLost:Connect(function()
+    local text = TargetBox.Text:lower()
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Name:lower():find(text) then
+            TargetPlayer = p.Name
+            TargetBox.Text = p.Name
+            SendNotif("Target", "Selected: " .. p.Name)
+            break
+        end
     end
 end)
 
-yPos = yPos + 10
-
--- Spawn Blobman ボタン
-CreateButton("🧊 Blobman スポーン", function()
-    Notify("Blobmanをスポーン中...")
-    SpawnBlobman()
-end, Color3.fromRGB(80, 60, 100))
-
--- Kick Target ボタン
-CreateButton("🎯 Kick Target", function()
-    if not TargetPlayer then
-        Notify("プレイヤーを選択してください")
-        return
-    end
-    Notify("攻撃中: " .. TargetPlayer)
-    task.spawn(function()
-        GrabThrowLoop(TargetPlayer)
-    end)
-end, Color3.fromRGB(60, 80, 120))
-
--- Loop Kick ボタン
-local LoopBtn = CreateButton("🔄 Loop Kick: OFF", function()
+-- Loop Kick Button
+CreateBtn("🔄 Loop Kick (Target)", 2, function(btn)
     IsLoopKicking = not IsLoopKicking
     IsAllKicking = false
     
     if IsLoopKicking then
         if not TargetPlayer then
-            Notify("プレイヤーを選択してください")
+            SendNotif("Error", "名前を入力してください")
             IsLoopKicking = false
             return
         end
+        btn.Text = "🔄 Loop Kick: ON"
+        btn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
         
-        LoopBtn.Text = "🔄 Loop Kick: ON"
-        LoopBtn.BackgroundColor3 = Color3.fromRGB(60, 150, 60)
-        Notify("ループ開始: " .. TargetPlayer)
-        
+        -- 高速ループ処理 (Heartbeat)
         task.spawn(function()
-            while IsLoopKicking do
-                if TargetPlayer then
-                    GrabThrowLoop(TargetPlayer)
-                end
-                wait(0.05)
+            while IsLoopKicking and TargetPlayer do
+                TeleportGrabAndThrow(TargetPlayer)
+                RunService.Heartbeat:Wait() -- 最速ループ
             end
+            btn.Text = "🔄 Loop Kick (Target)"
+            btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
         end)
     else
-        LoopBtn.Text = "🔄 Loop Kick: OFF"
-        LoopBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-        Notify("ループ停止")
+        btn.Text = "🔄 Loop Kick (Target)"
+        btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+        -- 停止時に元の場所へ戻る
+        if OriginalPosition and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            LocalPlayer.Character.HumanoidRootPart.CFrame = OriginalPosition
+            LocalPlayer.Character.HumanoidRootPart.Velocity = Vector3.new(0,0,0)
+            OriginalPosition = nil
+        end
     end
-end, Color3.fromRGB(50, 50, 60))
+end)
 
--- Kick ALL ボタン
-local AllBtn = CreateButton("💀 Kick ALL: OFF", function()
+-- Kick ALL Button
+CreateBtn("💀 Kick ALL", 3, function(btn)
     IsAllKicking = not IsAllKicking
     IsLoopKicking = false
-    LoopBtn.Text = "🔄 Loop Kick: OFF"
-    LoopBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
     
     if IsAllKicking then
-        AllBtn.Text = "💀 Kick ALL: ON"
-        AllBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
-        Notify("全員攻撃開始！")
+        btn.Text = "💀 Kick ALL: ON"
+        btn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
         
         task.spawn(function()
             while IsAllKicking do
-                for _, p in pairs(Players:GetPlayers()) do
-                    if p ~= LocalPlayer and IsAllKicking then
-                        GrabThrowLoop(p.Name)
-                        wait(0.1)
+                local players = GetPlayerNames()
+                for _, name in pairs(players) do
+                    if not IsAllKicking then break end
+                    TargetPlayer = name
+                    -- 各プレイヤーに対して数回実行して確実に飛ばす
+                    for i = 1, 5 do 
+                        TeleportGrabAndThrow(name)
+                        RunService.Heartbeat:Wait()
                     end
                 end
-                wait(0.05)
+                RunService.Heartbeat:Wait()
             end
+            btn.Text = "💀 Kick ALL"
+            btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
         end)
     else
-        AllBtn.Text = "💀 Kick ALL: OFF"
-        AllBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-        Notify("全員攻撃停止")
+        btn.Text = "💀 Kick ALL"
+        btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
     end
-end, Color3.fromRGB(50, 50, 60))
+end)
 
--- Refresh ボタン
-CreateButton("🔄 更新", function()
-    UpdatePlayers()
-    Notify("リスト更新完了")
-end, Color3.fromRGB(50, 90, 50))
+-- Force Spawn
+CreateBtn("🧊 Force Spawn Blobman", 4, function()
+    SpawnBlobman()
+end)
 
-Notify("v6.0 ロード完了！")
-print("=== Syu_hub v6.0 ===")
-print("準備完了！")
+-- 最小化ボタン
+local MiniBtn = Instance.new("TextButton")
+MiniBtn.Size = UDim2.new(0, 30, 0, 30)
+MiniBtn.Position = UDim2.new(1, -35, 0, 5)
+MiniBtn.Text = "-"
+MiniBtn.Parent = MainFrame
+MiniBtn.MouseButton1Click:Connect(function()
+    if MainFrame.Size.Y.Offset > 50 then
+        MainFrame:TweenSize(UDim2.new(0, 320, 0, 40), "Out", "Quad", 0.3)
+        ScrollFrame.Visible = false
+    else
+        MainFrame:TweenSize(UDim2.new(0, 320, 0, 420), "Out", "Quad", 0.3)
+        ScrollFrame.Visible = true
+    end
+end)
+
+-- ドラッグ処理
+local dragging, dragInput, dragStart, startPos
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+    end
+end)
+MainFrame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input == dragInput then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+
+SendNotif("Syu_hub", "v7.0 Fixed Loaded")
