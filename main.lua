@@ -1,255 +1,242 @@
--- Fling Things and People | Delta-Compatible Blobman Kick Hub v2.0
--- Delta Executor 完全対応: PlayerGui使用 + identifyexecutor検知
--- 使い方: 
--- 1. Delta Executorで実行
--- 2. ゲーム内でBlobmanをGrab (推奨: 近くのBlobman自動検知)
--- 3. GUIでターゲット選択 or Eキー/ボタンでKick!
--- 新機能: Draggable UI, Super Strength Toggle, Kick All
+--[[
+    Syu_hub v6.0 | Blobman Kicker & Auto Grab
+    Target: Fling Things and People
+    Library: Rayfield Interface Suite (Delta Compatible)
+]]
 
+-- Rayfield UI ロード
+local Rayfield = loadstring(game:HttpGet('https://raw.githubusercontent.com/UI-Interface/CustomFIeld/main/RayField.lua'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Syu_hub | Blobman Kick v6",
+    LoadingTitle = "Syu_hub v6.0",
+    LoadingSubtitle = "by YourName",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "SyuHub",
+        FileName = "Config"
+    },
+    Discord = {
+        Enabled = false
+    },
+    KeySystem = false
+})
+
+-- ■■■ Services ■■■
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local Debris = game:GetService("Debris")
-
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
--- Executor検知 (Delta対応)
-local executor = identifyexecutor and identifyexecutor() or "Unknown"
-local UsePlayerGui = (executor == "Delta")
+-- ■■■ Variables ■■■
+local TargetPlayer = nil
+local IsLoopKicking = false
+local IsAutoGrabbing = false
+local OriginalPosition = nil
 
--- 設定
-local KICK_SPEED = 800
-local KICK_POWER = 20000
-local SUPER_STRENGTH = false
-local KEYBIND = Enum.KeyCode.E
+-- ■■■ Utility Functions ■■■ (変更なし)
 
--- Draggable関数 (Delta UI改善)
-local function makeDraggable(frame)
-    local dragging = false
-    local dragStart = nil
-    local startPos = nil
-    local UIS = UserInputService
+function SendNotif(title, content)
+    Rayfield:Notify({
+        Title = title,
+        Content = content,
+        Duration = 5,
+        Image = 4483345998
+    })
+end
 
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
+function GetPlayerNames()
+    local names = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            table.insert(names, p.Name)
+        end
+    end
+    return names
+end
+
+function FindBlobman()
+    local nearest, dist = nil, 500
+    for _, v in pairs(Workspace:GetDescendants()) do
+        if (v.Name == "Blobman" or v.Name == "Ragdoll") and v:IsA("Model") and v:FindFirstChild("HumanoidRootPart") then
+            if not Players:GetPlayerFromCharacter(v) then
+                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp and v.HumanoidRootPart then
+                    local d = (v.HumanoidRootPart.Position - hrp.Position).Magnitude
+                    if d < dist then
+                        dist = d
+                        nearest = v
+                    end
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+function SpawnBlobman()
+    local args = {[1] = "Blobman"}
+    local spawned = false
+    local remotes = {
+        ReplicatedStorage:FindFirstChild("SpawnItem"),
+        ReplicatedStorage:FindFirstChild("CreateItem"),
+        Workspace:FindFirstChild("SpawnEvents")
+    }
+
+    for _, remote in pairs(remotes) do
+        if remote and remote:IsA("RemoteEvent") then
+            remote:FireServer(unpack(args))
+            spawned = true
+        end
+    end
+    
+    if spawned then
+        SendNotif("System", "Blobmanのスポーンを試みました")
+    else
+        SendNotif("Warning", "自動スポーンに失敗しました。手動で出してください。")
+    end
+end
+
+function TeleportAndAttack(targetName)
+    local target = Players:FindFirstChild(targetName)
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
+
+    local myHrp = char.HumanoidRootPart
+    local targetHrp = target.Character.HumanoidRootPart
+
+    if not OriginalPosition then
+        OriginalPosition = myHrp.CFrame
+    end
+
+    local ammo = FindBlobman()
+    if not ammo then
+        SpawnBlobman()
+        task.wait(0.2)
+        ammo = FindBlobman()
+        if not ammo then return end
+    end
+
+    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+        for i = 1, 5 do
+            ammo.HumanoidRootPart.CFrame = myHrp.CFrame * CFrame.new(0, 0, -2)
+            ammo.HumanoidRootPart.Velocity = Vector3.new(0,0,0)
+            RunService.RenderStepped:Wait()
+        end
+    end
+
+    myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1) 
+    task.wait(0.01) 
+    
+    local bv = Instance.new("BodyAngularVelocity")
+    bv.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bv.AngularVelocity = Vector3.new(500, 500, 500)
+    bv.Parent = myHrp
+    
+    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+        ammo.HumanoidRootPart.CFrame = targetHrp.CFrame
+        ammo.HumanoidRootPart.Velocity = (targetHrp.Position - myHrp.Position).Unit * 1000
+    end
+
+    task.wait(0.05)
+    bv:Destroy()
+
+    myHrp.CFrame = OriginalPosition
+    myHrp.Velocity = Vector3.new(0,0,0)
+    OriginalPosition = nil
+end
+
+-- ■■■ UI Construction (Rayfield) ■■■
+
+local MainTab = Window:CreateTab("Main", 4483345998)
+
+local TargetSection = MainTab:CreateSection("Target Selector")
+
+local PlayerDropdown = MainTab:CreateDropdown({
+    Name = "Select Target Player",
+    Options = GetPlayerNames(),
+    CurrentOption = "...",
+    Flag = "TargetPlayer",
+    Callback = function(Value)
+        TargetPlayer = Value
+        SendNotif("Selected", "Target: " .. Value)
+    end
+})
+
+MainTab:CreateButton({
+    Name = "Refresh Player List",
+    Callback = function()
+        PlayerDropdown:Refresh(GetPlayerNames())
+        SendNotif("Refreshed", "Player list updated.")
+    end
+})
+
+local ActionSection = MainTab:CreateSection("Actions")
+
+MainTab:CreateButton({
+    Name = "Kick Target (Hit & Run)",
+    Callback = function()
+        if TargetPlayer then
+            SendNotif("Kicking", "Attacking " .. TargetPlayer)
+            TeleportAndAttack(TargetPlayer)
+        else
+            SendNotif("Error", "プレイヤーを選択してください")
+        end
+    end
+})
+
+local LoopToggle = MainTab:CreateToggle({
+    Name = "Loop Kick Target",
+    CurrentValue = false,
+    Flag = "LoopKick",
+    Callback = function(Value)
+        IsLoopKicking = Value
+        if Value and TargetPlayer then
+            SendNotif("Loop Check", "Loop started for " .. TargetPlayer)
+            task.spawn(function()
+                while IsLoopKicking and TargetPlayer do
+                    TeleportAndAttack(TargetPlayer)
+                    task.wait(0.1)
                 end
             end)
         end
-    end)
-
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
-            dragInput = input
-        end
-    end)
-
-    UIS.InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
-end
-
--- Blobman検索 (自分の優先 + 自動Spawn代替)
-local function findBlobman()
-    for _, obj in pairs(workspace:GetChildren()) do
-        if obj.Name == "Blobman" and obj:FindFirstChild("HumanoidRootPart") and obj:FindFirstChild("Humanoid") then
-            if obj:FindFirstChild("HumanoidRootPart").Parent == Character then
-                return obj
-            end
-        end
     end
-    -- 代替: 近くのBlobman
-    local nearest, dist = nil, math.huge
-    for _, obj in pairs(workspace:GetChildren()) do
-        if obj.Name == "Blobman" and obj:FindFirstChild("HumanoidRootPart") then
-            local d = (obj.HumanoidRootPart.Position - HumanoidRootPart.Position).Magnitude
-            if d < dist and d < 50 then
-                dist = d
-                nearest = obj
-            end
+})
+
+MainTab:CreateButton({
+    Name = "Kick ALL Loop (Toggle)",
+    Callback = function()
+        IsLoopKicking = not IsLoopKicking
+        LoopToggle:Set(IsLoopKicking) -- トグルの見た目を同期
+        if IsLoopKicking then
+            SendNotif("ALL KICK", "Starting massacre...")
+            task.spawn(function()
+                while IsLoopKicking do
+                    for _, p in pairs(Players:GetPlayers()) do
+                        if p ~= LocalPlayer and IsLoopKicking then
+                            TeleportAndAttack(p.Name)
+                            task.wait(0.2)
+                        end
+                    end
+                    task.wait()
+                end
+            end)
+        else
+            SendNotif("Stopped", "All Kick Stopped.")
         end
     end
-    return nearest
-end
+})
 
--- Nearest Target
-local function findNearestTarget()
-    local nearest, dist = nil, math.huge
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-            local d = (plr.Character.HumanoidRootPart.Position - HumanoidRootPart.Position).Magnitude
-            if d < dist then dist = d; nearest = plr end
-        end
+local MiscSection = MainTab:CreateSection("Misc / Settings")
+
+MainTab:CreateButton({
+    Name = "Force Spawn Blobman",
+    Callback = function()
+        SpawnBlobman()
     end
-    return nearest
-end
+})
 
--- Kick関数 (Blobman強化版)
-local function kickTarget(target)
-    if not target or not target.Character then return end
-    local targetRoot = target.Character.HumanoidRootPart
-    local blobman = findBlobman()
-    
-    if not blobman then
-        game.StarterGui:SetCore("SendNotification", {Title="Delta Blobman Kick"; Text="Blobmanなし！Grabしてね"; Duration=3})
-        return
-    end
-    
-    local blobRoot = blobman.HumanoidRootPart
-    local weld = Instance.new("WeldConstraint", HumanoidRootPart)
-    weld.Part0 = HumanoidRootPart
-    weld.Part1 = blobRoot
-    
-    local dir = (targetRoot.Position - HumanoidRootPart.Position).Unit
-    HumanoidRootPart.CFrame = targetRoot.CFrame * CFrame.new(0,0,-8)
-    
-    if SUPER_STRENGTH then
-        KICK_SPEED = 1500; KICK_POWER = 50000  -- Superモード
-    end
-    
-    local bv = Instance.new("BodyVelocity", HumanoidRootPart)
-    bv.MaxForce = Vector3.new(1e5,1e5,1e5)
-    bv.Velocity = dir * KICK_SPEED
-    
-    local ag = Instance.new("AngularVelocity", HumanoidRootPart)
-    ag.MaxTorque = Vector3.new(1e5,1e5,1e5)
-    ag.AngularVelocity = Vector3.new(math.random(-100,100), math.random(-100,100), math.random(-100,100))
-    
-    Debris:AddItem(bv, 0.5)
-    Debris:AddItem(ag, 0.5)
-    wait(0.2)
-    weld:Destroy()
-    
-    game.StarterGui:SetCore("SendNotification", {Title="Delta Blobman Kick"; Text=target.Name.."をキック！"; Duration=2})
-end
-
--- Super Strength Toggle (投げ強化)
-local function toggleSuper()
-    SUPER_STRENGTH = not SUPER_STRENGTH
-    game.StarterGui:SetCore("SendNotification", {Title="Super Strength"; Text=SUPER_STRENGTH and "ON (強力！)" or "OFF"; Duration=2})
-end
-
--- Kick All (スパム注意)
-local function kickAll()
-    for _, plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer then
-            spawn(function() kickTarget(plr) end)
-        end
-    end
-end
-
--- キーE
-UserInputService.InputBegan:Connect(function(input)
-    if input.KeyCode == KEYBIND then
-        kickTarget(findNearestTarget())
-    end
-end)
-
--- Delta対応ScreenGui
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "DeltaBlobmanKick"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.IgnoreGuiInset = true
-ScreenGui.Parent = UsePlayerGui and PlayerGui or game:GetService("CoreGui")
-
--- Main Frame (Draggable + 赤黒テーマ)
-local Frame = Instance.new("Frame")
-Frame.Parent = ScreenGui
-Frame.BackgroundColor3 = Color3.new(0,0,0)
-Frame.BorderColor3 = Color3.new(1,0,0)
-Frame.BorderSizePixel = 3
-Frame.Position = UDim2.new(0, 10, 0.3, 0)
-Frame.Size = UDim2.new(0, 220, 0, 280)
-makeDraggable(Frame)
-
--- タイトル
-local Title = Instance.new("TextLabel")
-Title.Parent = Frame
-Title.BackgroundColor3 = Color3.new(1,0,0)
-Title.BorderSizePixel = 0
-Title.Size = UDim2.new(1,0,0,35)
-Title.Font = Enum.Font.SourceSansBold
-Title.Text = "Delta Blobman Kick v2.0"
-Title.TextColor3 = Color3.new(1,1,1)
-Title.TextSize = 18
-
--- Kick Nearest
-local KickNearest = Instance.new("TextButton")
-KickNearest.Parent = Frame
-KickNearest.Position = UDim2.new(0,10,0,50)
-KickNearest.Size = UDim2.new(1,-20,0,30)
-KickNearest.BackgroundColor3 = Color3.new(0.2,0.2,0.2)
-KickNearest.BorderColor3 = Color3.new(1,0,0)
-KickNearest.BorderSizePixel = 2
-KickNearest.Font = Enum.Font.SourceSans
-KickNearest.Text = "Kick Nearest (Eキー)"
-KickNearest.TextColor3 = Color3.new(1,1,1)
-KickNearest.TextSize = 14
-KickNearest.MouseButton1Click:Connect(function()
-    kickTarget(findNearestTarget())
-end)
-
--- Super Strength
-local SuperBtn = Instance.new("TextButton")
-SuperBtn.Parent = Frame
-SuperBtn.Position = UDim2.new(0,10,0,90)
-SuperBtn.Size = UDim2.new(1,-20,0,30)
-SuperBtn.BackgroundColor3 = Color3.new(0.8,0.2,0.2)
-SuperBtn.BorderColor3 = Color3.new(1,0,0)
-SuperBtn.BorderSizePixel = 2
-SuperBtn.Font = Enum.Font.SourceSans
-SuperBtn.Text = "Super Strength: OFF"
-SuperBtn.TextColor3 = Color3.new(1,1,1)
-SuperBtn.TextSize = 14
-SuperBtn.MouseButton1Click:Connect(function()
-    toggleSuper()
-    SuperBtn.Text = "Super Strength: "..(SUPER_STRENGTH and "ON" or "OFF")
-    SuperBtn.BackgroundColor3 = SUPER_STRENGTH and Color3.new(0.2,0.8,0.2) or Color3.new(0.8,0.2,0.2)
-end)
-
--- Kick All (危険)
-local KickAll = Instance.new("TextButton")
-KickAll.Parent = Frame
-KickAll.Position = UDim2.new(0,10,0,130)
-KickAll.Size = UDim2.new(1,-20,0,30)
-KickAll.BackgroundColor3 = Color3.new(0.5,0,0)
-KickAll.BorderColor3 = Color3.new(1,0,0)
-KickAll.BorderSizePixel = 2
-KickAll.Font = Enum.Font.SourceSans
-KickAll.Text = "Kick All (スパム注意!)"
-KickAll.TextColor3 = Color3.new(1,1,1)
-KickAll.TextSize = 14
-KickAll.MouseButton1Click:Connect(kickAll)
-
--- ステータス
-local Status = Instance.new("TextLabel")
-Status.Parent = Frame
-Status.Position = UDim2.new(0,10,0,170)
-Status.Size = UDim2.new(1,-20,0,40)
-Status.BackgroundTransparency = 1
-Status.Font = Enum.Font.SourceSans
-Status.Text = "Executor: "..executor.."\nBlobman: 検索中...\nキー: E"
-Status.TextColor3 = Color3.new(0.8,0.8,0.8)
-Status.TextSize = 12
-Status.TextXAlignment = Enum.TextXAlignment.Left
-
--- 更新ループ
-RunService.Heartbeat:Connect(function()
-    local blob = findBlobman()
-    Status.Text = "Executor: "..executor.."\nBlobman: "..(blob and "OK" or "なし").."\nキー: E | Super: "..(SUPER_STRENGTH and "ON" or "OFF")
-end)
-
-print("Delta Blobman Kick Hub Loaded! (PlayerGui: "..tostring(UsePlayerGui)..")")
-game.StarterGui:SetCore("SendNotification", {Title="Delta Hub"; Text="Blobman Kick Ready! Eキー or GUI"; Duration=5})
+-- ロード完了通知
+SendNotif("Syu_hub Loaded", "Version 6.0 | Rayfield UI (Delta対応)\nReady to kick.")
