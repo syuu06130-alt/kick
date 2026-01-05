@@ -1,235 +1,405 @@
 --[[
-    Poison Grab - Standalone
-    Theme: Purple & Dark
+    Syu_hub v7.0 | Blobman Kicker - Rayfield Edition
     Target: Fling Things and People
+    Library: Rayfield (Sirius Menu)
 ]]
 
--- ■■■ Services ■■■
+-- Services
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
--- ■■■ Variables ■■■
+-- Variables
 local TargetPlayer = nil
-local IsGrabbing = false
-local CurrentCamera = Workspace.CurrentCamera
+local IsLoopKicking = false
+local IsAllKicking = false
+local BlobmanTool = nil
+local GrabDelay = 0.01
 
--- ■■■ UI Setup (Purple Theme) ■■■
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "PoisonGrabUI"
-ScreenGui.ResetOnSpawn = false
-if LocalPlayer:FindFirstChild("PlayerGui") then
-    ScreenGui.Parent = LocalPlayer.PlayerGui
-else
-    ScreenGui.Parent = game.CoreGui
-end
+-- Rayfield Library
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 300, 0, 350)
-MainFrame.Position = UDim2.new(0.5, -150, 0.4, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
-MainFrame.BorderSizePixel = 2
-MainFrame.BorderColor3 = Color3.fromRGB(170, 0, 255) -- Purple Border
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Parent = ScreenGui
-
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 40)
-Title.BackgroundColor3 = Color3.fromRGB(40, 20, 50)
-Title.Text = "Poison Grab UI"
-Title.TextColor3 = Color3.fromRGB(200, 100, 255)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 18
-Title.Parent = MainFrame
-
--- Target Input
-local InputBox = Instance.new("TextBox")
-InputBox.Size = UDim2.new(0.9, 0, 0, 40)
-InputBox.Position = UDim2.new(0.05, 0, 0.15, 0)
-InputBox.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-InputBox.BorderColor3 = Color3.fromRGB(100, 0, 150)
-InputBox.Text = ""
-InputBox.PlaceholderText = "Enter Target Name..."
-InputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-InputBox.Font = Enum.Font.Gotham
-InputBox.TextSize = 14
-InputBox.Parent = MainFrame
-
--- Status Label
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(0.9, 0, 0, 30)
-StatusLabel.Position = UDim2.new(0.05, 0, 0.28, 0)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "Status: Idle"
-StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.TextSize = 12
-StatusLabel.Parent = MainFrame
-
--- ■■■ Utility Functions ■■■
-
--- プレイヤー検索（部分一致対応）
-function FindPlayer(namePart)
-    if not namePart or namePart == "" then return nil end
-    namePart = string.lower(namePart)
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            if string.find(string.lower(player.Name), namePart) or string.find(string.lower(player.DisplayName), namePart) then
-                return player
-            end
+-- Get Player List
+local function GetPlayerNames()
+    local names = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            table.insert(names, p.Name)
         end
     end
+    return names
+end
+
+-- Find or Spawn Blobman
+local function GetBlobman()
+    for _, item in pairs(Workspace:GetDescendants()) do
+        if item.Name == "CreatureBlobman" and item:FindFirstChild("VehicleSeat") then
+            return item
+        end
+    end
+    
+    -- Spawn new Blobman
+    local args = {
+        [1] = Workspace.Spawn,
+        [2] = "Blobman"
+    }
+    
+    if ReplicatedStorage:FindFirstChild("MenuToys") and ReplicatedStorage.MenuToys:FindFirstChild("SpawnToyRemoteFunction") then
+        ReplicatedStorage.MenuToys.SpawnToyRemoteFunction:InvokeServer("Blobman", LocalPlayer.Character.HumanoidRootPart.CFrame, Vector3.new(0, 0, 0))
+        wait(0.5)
+        return GetBlobman()
+    end
+    
     return nil
 end
 
--- Blobman（Poison）を探す
-function FindPoison()
-    local nearest = nil
-    for _, v in pairs(Workspace:GetDescendants()) do
-        if (v.Name == "Blobman" or v.Name == "Ragdoll") and v:IsA("Model") and v:FindFirstChild("HumanoidRootPart") then
-            if not Players:GetPlayerFromCharacter(v) then
-                nearest = v
-                break -- 最初に見つけたものを使う
-            end
+-- Grab Player with Blobman
+local grabSide = 1
+local function BlobGrabPlayer(targetName)
+    local target = Players:FindFirstChild(targetName)
+    if not target or not target.Character then return end
+    
+    local blobman = GetBlobman()
+    if not blobman then 
+        Rayfield:Notify({
+            Title = "Error",
+            Content = "Blobmanが見つかりません！",
+            Duration = 3,
+            Image = 4483362458,
+        })
+        return 
+    end
+    
+    local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
+    if not targetHRP then return end
+    
+    -- Alternate between left and right grab
+    local detector = grabSide == 1 and blobman:FindFirstChild("LeftDetector") or blobman:FindFirstChild("RightDetector")
+    local weld = grabSide == 1 and detector:FindFirstChild("LeftWeld") or detector:FindFirstChild("RightWeld")
+    
+    if detector and weld and blobman:FindFirstChild("BlobmanSeatAndOwnerScript") then
+        local grabRemote = blobman.BlobmanSeatAndOwnerScript:FindFirstChild("CreatureGrab")
+        if grabRemote then
+            local args = {
+                [1] = detector,
+                [2] = targetHRP,
+                [3] = weld
+            }
+            grabRemote:FireServer(unpack(args))
+            grabSide = grabSide == 1 and 2 or 1
         end
     end
-    return nearest
 end
 
--- Blobmanをスポーンさせる
-function SpawnPoison()
-    local args = { [1] = "Blobman" }
-    local remotes = {
-        ReplicatedStorage:FindFirstChild("SpawnItem"),
-        ReplicatedStorage:FindFirstChild("CreateItem"),
-        Workspace:FindFirstChild("SpawnEvents")
+-- Kick Single Target Loop
+local function KickTargetLoop()
+    while IsLoopKicking and TargetPlayer do
+        pcall(function()
+            BlobGrabPlayer(TargetPlayer)
+        end)
+        wait(GrabDelay)
+    end
+end
+
+-- Kick All Players Loop
+local function KickAllLoop()
+    while IsAllKicking do
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and IsAllKicking then
+                pcall(function()
+                    BlobGrabPlayer(player.Name)
+                end)
+                wait(GrabDelay)
+            end
+        end
+        wait(0.05)
+    end
+end
+
+-- Create Rayfield Window
+local Window = Rayfield:CreateWindow({
+    Name = "🎯 Syu_hub v7.0 | Rayfield",
+    Icon = 0,
+    LoadingTitle = "Syu_hub Loading...",
+    LoadingSubtitle = "by Syu",
+    Theme = "Default",
+    DisableRayfieldPrompts = false,
+    DisableBuildWarnings = false,
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = nil,
+        FileName = "SyuHub_Rayfield"
+    },
+    Discord = {
+        Enabled = false,
+        Invite = "noinvitelink",
+        RememberJoins = true
+    },
+    KeySystem = false,
+    KeySettings = {
+        Title = "Syu_hub",
+        Subtitle = "Key System",
+        Note = "No key required",
+        FileName = "SyuHubKey",
+        SaveKey = false,
+        GrabKeyFromSite = false,
+        Key = {""}
     }
-    for _, remote in pairs(remotes) do
-        if remote and remote:IsA("RemoteEvent") then
-            pcall(function() remote:FireServer(unpack(args)) end)
+})
+
+-- Home Tab
+local HomeTab = Window:CreateTab("🏠 Home", 10723407389)
+
+HomeTab:CreateParagraph({
+    Title = "Welcome!",
+    Content = "Syu_hub v7.0 - Blobman Auto Kick\n現在のプレイヤー: " .. LocalPlayer.Name
+})
+
+HomeTab:CreateLabel("Rayfield Library by Sirius", 10709797725, Color3.fromRGB(100, 100, 255), false)
+
+HomeTab:CreateDivider()
+
+HomeTab:CreateParagraph({
+    Title = "使い方",
+    Content = "1. ターゲットを選択\n2. Loop Kickを有効化\n3. 停止する場合は再度トグル"
+})
+
+-- Main Tab
+local MainTab = Window:CreateTab("⚔️ Combat", 10723404472)
+
+MainTab:CreateParagraph({
+    Title = "Blobman Auto Kick",
+    Content = "Blobmanで自動的にプレイヤーを掴んで投げます"
+})
+
+-- Player Selection
+local playerDropdownValue = nil
+local PlayerDropdown = MainTab:CreateDropdown({
+    Name = "ターゲット選択",
+    Options = GetPlayerNames(),
+    CurrentOption = {"プレイヤーを選択..."},
+    MultipleOptions = false,
+    Flag = "PlayerDropdown",
+    Callback = function(Option)
+        TargetPlayer = Option[1]
+        playerDropdownValue = Option[1]
+        Rayfield:Notify({
+            Title = "ターゲット選択",
+            Content = "選択: " .. TargetPlayer,
+            Duration = 2,
+            Image = 4483362458,
+        })
+    end,
+})
+
+-- Refresh Button
+MainTab:CreateButton({
+    Name = "🔄 プレイヤーリスト更新",
+    Callback = function()
+        PlayerDropdown:Refresh(GetPlayerNames())
+        Rayfield:Notify({
+            Title = "更新完了",
+            Content = "プレイヤーリストを更新しました",
+            Duration = 2,
+            Image = 4483362458,
+        })
+    end,
+})
+
+MainTab:CreateDivider()
+
+-- Spawn Blobman Button
+MainTab:CreateButton({
+    Name = "🧊 Blobman スポーン",
+    Callback = function()
+        local success = pcall(function()
+            GetBlobman()
+        end)
+        if success then
+            Rayfield:Notify({
+                Title = "成功",
+                Content = "Blobmanをスポーンしました",
+                Duration = 2,
+                Image = 4483362458,
+            })
+        else
+            Rayfield:Notify({
+                Title = "エラー",
+                Content = "スポーンに失敗しました",
+                Duration = 3,
+                Image = 4483362458,
+            })
         end
-    end
-end
+    end,
+})
 
--- ■■■ Core Logic ■■■
-local function StartGrab()
-    if not TargetPlayer then
-        StatusLabel.Text = "Status: Invalid Target"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-        return
-    end
+-- Single Kick Button
+MainTab:CreateButton({
+    Name = "🎯 Kick Target (1回)",
+    Callback = function()
+        if not TargetPlayer then
+            Rayfield:Notify({
+                Title = "エラー",
+                Content = "プレイヤーを選択してください",
+                Duration = 3,
+                Image = 4483362458,
+            })
+            return
+        end
+        
+        BlobGrabPlayer(TargetPlayer)
+        Rayfield:Notify({
+            Title = "Kick実行",
+            Content = TargetPlayer .. " を攻撃しました",
+            Duration = 2,
+            Image = 4483362458,
+        })
+    end,
+})
 
-    IsGrabbing = true
-    StatusLabel.Text = "Status: POISONING " .. TargetPlayer.Name
-    StatusLabel.TextColor3 = Color3.fromRGB(170, 0, 255)
+MainTab:CreateDivider()
 
-    -- メインループ
-    task.spawn(function()
-        while IsGrabbing and TargetPlayer and TargetPlayer.Character do
-            local myChar = LocalPlayer.Character
-            local targetChar = TargetPlayer.Character
-            
-            if myChar and targetChar and myChar:FindFirstChild("HumanoidRootPart") and targetChar:FindFirstChild("HumanoidRootPart") then
-                local myHRP = myChar.HumanoidRootPart
-                local targetHRP = targetChar.HumanoidRootPart
-
-                -- 1. 自分をターゲットの背後に固定 (Grab)
-                myHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 2)
-                myHRP.Velocity = Vector3.zero
-                myHRP.RotVelocity = Vector3.zero
-
-                -- 2. Poison (Blobman) をターゲットに接触させる
-                local poison = FindPoison()
-                if not poison then
-                    SpawnPoison()
-                elseif poison:FindFirstChild("HumanoidRootPart") then
-                    -- Poisonをターゲット位置へ飛ばす
-                    poison.HumanoidRootPart.CFrame = targetHRP.CFrame
-                    poison.HumanoidRootPart.Velocity = Vector3.zero
-                    poison.HumanoidRootPart.RotVelocity = Vector3.zero
-                end
-            else
-                -- キャラクターが存在しない場合待機
-                IsGrabbing = false
-                StatusLabel.Text = "Status: Target Lost"
+-- Loop Kick Toggle
+local LoopToggle = MainTab:CreateToggle({
+    Name = "🔄 Loop Kick Target",
+    CurrentValue = false,
+    Flag = "LoopKick",
+    Callback = function(Value)
+        IsLoopKicking = Value
+        IsAllKicking = false
+        
+        if Value then
+            if not TargetPlayer then
+                Rayfield:Notify({
+                    Title = "エラー",
+                    Content = "プレイヤーを選択してください",
+                    Duration = 3,
+                    Image = 4483362458,
+                })
+                LoopToggle:Set(false)
+                return
             end
-            RunService.RenderStepped:Wait()
+            
+            Rayfield:Notify({
+                Title = "ループ開始",
+                Content = TargetPlayer .. " へのループ攻撃開始",
+                Duration = 2,
+                Image = 4483362458,
+            })
+            
+            task.spawn(KickTargetLoop)
+        else
+            Rayfield:Notify({
+                Title = "停止",
+                Content = "ループ攻撃を停止しました",
+                Duration = 2,
+                Image = 4483362458,
+            })
         end
-        IsGrabbing = false
-    end)
-end
+    end,
+})
 
--- ■■■ Buttons ■■■
+-- Kick All Toggle
+local AllToggle = MainTab:CreateToggle({
+    Name = "💀 Kick ALL Players",
+    CurrentValue = false,
+    Flag = "KickAll",
+    Callback = function(Value)
+        IsAllKicking = Value
+        IsLoopKicking = false
+        LoopToggle:Set(false)
+        
+        if Value then
+            Rayfield:Notify({
+                Title = "全員攻撃",
+                Content = "全プレイヤーへの攻撃を開始",
+                Duration = 2,
+                Image = 4483362458,
+            })
+            
+            task.spawn(KickAllLoop)
+        else
+            Rayfield:Notify({
+                Title = "停止",
+                Content = "全員攻撃を停止しました",
+                Duration = 2,
+                Image = 4483362458,
+            })
+        end
+    end,
+})
 
--- Grab Button
-local GrabBtn = Instance.new("TextButton")
-GrabBtn.Size = UDim2.new(0.9, 0, 0, 50)
-GrabBtn.Position = UDim2.new(0.05, 0, 0.45, 0)
-GrabBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 80)
-GrabBtn.Text = "GRAB & POISON"
-GrabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-GrabBtn.Font = Enum.Font.GothamBold
-GrabBtn.TextSize = 16
-GrabBtn.Parent = MainFrame
-Instance.new("UICorner", GrabBtn).CornerRadius = UDim.new(0, 8)
-local Stroke1 = Instance.new("UIStroke")
-Stroke1.Color = Color3.fromRGB(170, 0, 255)
-Stroke1.Thickness = 2
-Stroke1.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-Stroke1.Parent = GrabBtn
+MainTab:CreateDivider()
 
-GrabBtn.MouseButton1Click:Connect(function()
-    local name = InputBox.Text
-    local found = FindPlayer(name)
-    if found then
-        TargetPlayer = found
-        InputBox.Text = found.Name -- フルネームに補完
-        StartGrab()
-    else
-        StatusLabel.Text = "Status: Player not found"
-    end
-end)
+-- Grab Delay Slider
+MainTab:CreateSlider({
+    Name = "⏱️ 掴み間隔 (秒)",
+    Range = {0.01, 1},
+    Increment = 0.01,
+    Suffix = "秒",
+    CurrentValue = 0.01,
+    Flag = "GrabDelay",
+    Callback = function(Value)
+        GrabDelay = Value
+    end,
+})
 
--- Release Button
-local ReleaseBtn = Instance.new("TextButton")
-ReleaseBtn.Size = UDim2.new(0.9, 0, 0, 50)
-ReleaseBtn.Position = UDim2.new(0.05, 0, 0.65, 0)
-ReleaseBtn.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
-ReleaseBtn.Text = "RELEASE TARGET"
-ReleaseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ReleaseBtn.Font = Enum.Font.GothamBold
-ReleaseBtn.TextSize = 16
-ReleaseBtn.Parent = MainFrame
-Instance.new("UICorner", ReleaseBtn).CornerRadius = UDim.new(0, 8)
-local Stroke2 = Instance.new("UIStroke")
-Stroke2.Color = Color3.fromRGB(255, 50, 50)
-Stroke2.Thickness = 1
-Stroke2.Parent = ReleaseBtn
+-- Settings Tab
+local SettingsTab = Window:CreateTab("⚙️ Settings", 10734943448)
 
-ReleaseBtn.MouseButton1Click:Connect(function()
-    IsGrabbing = false
-    StatusLabel.Text = "Status: Released"
-    StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-end)
+SettingsTab:CreateParagraph({
+    Title = "設定",
+    Content = "スクリプトの各種設定を変更できます"
+})
 
--- Close Button
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-CloseBtn.Position = UDim2.new(1, -35, 0, 5)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(100, 0, 0)
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = Color3.new(1,1,1)
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.Parent = MainFrame
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 4)
+SettingsTab:CreateButton({
+    Name = "🔄 UI再読み込み",
+    Callback = function()
+        Rayfield:Destroy()
+        wait(0.5)
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/Undebolted/FTAP/main/Script.lua"))()
+    end,
+})
 
-CloseBtn.MouseButton1Click:Connect(function()
-    IsGrabbing = false
-    ScreenGui:Destroy()
-end)
+SettingsTab:CreateButton({
+    Name = "❌ UI閉じる",
+    Callback = function()
+        IsLoopKicking = false
+        IsAllKicking = false
+        Rayfield:Destroy()
+    end,
+})
 
-print("Poison Grab UI Loaded")
+-- Info Tab
+local InfoTab = Window:CreateTab("ℹ️ Info", 10747373176)
+
+InfoTab:CreateParagraph({
+    Title = "Syu_hub v7.0",
+    Content = "Rayfield Edition\n対応ゲーム: Fling Things and People"
+})
+
+InfoTab:CreateLabel("作成者: Syu", 10709797725, Color3.fromRGB(150, 150, 255), false)
+
+InfoTab:CreateParagraph({
+    Title = "機能一覧",
+    Content = "• ターゲット選択\n• 単発Kick\n• ループKick\n• 全員Kick\n• Blobman自動スポーン\n• 掴み間隔調整"
+})
+
+InfoTab:CreateParagraph({
+    Title = "注意事項",
+    Content = "このスクリプトは教育目的のみで作成されています。\n悪用は絶対にしないでください。"
+})
+
+-- Initial Notification
+Rayfield:Notify({
+    Title = "🎯 Syu_hub v7.0",
+    Content = "Rayfield版ロード完了！",
+    Duration = 5,
+    Image = 4483362458,
+})
+
+print("=== Syu_hub v7.0 Rayfield Edition ===")
+print("Loaded successfully!")
+print("Ready to kick!")
