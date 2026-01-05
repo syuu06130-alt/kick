@@ -1,7 +1,7 @@
 --[[
-    Syu_hub v6.0 | Blobman Kicker & Auto Grab
-    Target: Fling Things and People
-    Custom UI Edition - Fixed Version
+    Syu_hub v6.0 Fixed | Blobman Kicker & Auto Grab
+    UI: Original Custom Design
+    Logic: Refactored for better physics replication
 ]]
 
 -- ■■■ Services ■■■
@@ -18,9 +18,16 @@ local IsLoopKicking = false
 local IsAllKicking = false
 local OriginalPosition = nil
 local minimizeLevel = 0
+local CurrentConnection = nil -- ループ制御用
 
 -- ■■■ Utility Functions ■■■
 function SendNotif(title, content)
+    -- StarterGuiの通知も利用（確実に見えるように）
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = title;
+        Text = content;
+        Duration = 3;
+    })
     print("[" .. title .. "] " .. content)
 end
 
@@ -34,18 +41,24 @@ function GetPlayerNames()
     return names
 end
 
+-- Blobman探索ロジックの改善
 function FindBlobman()
-    local nearest, dist = nil, 500
+    local nearest, dist = nil, 1000 -- 探索範囲拡大
+    local character = LocalPlayer.Character
+    local hrp = character and character:FindFirstChild("HumanoidRootPart")
+    
+    if not hrp then return nil end
+
+    -- 物理演算が有効なパーツを持つモデルを探す
     for _, v in pairs(Workspace:GetDescendants()) do
-        if (v.Name == "Blobman" or v.Name == "Ragdoll") and v:IsA("Model") and v:FindFirstChild("HumanoidRootPart") then
-            if not Players:GetPlayerFromCharacter(v) then
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if hrp and v.HumanoidRootPart then
-                    local d = (v.HumanoidRootPart.Position - hrp.Position).Magnitude
-                    if d < dist then
-                        dist = d
-                        nearest = v
-                    end
+        if (v.Name == "Blobman" or v.Name == "Ragdoll" or v.Name == "Item") and v:IsA("Model") then
+            local targetPart = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Torso") or v:FindFirstChild("Head") or v.PrimaryPart
+            
+            if targetPart and not Players:GetPlayerFromCharacter(v) then
+                local d = (targetPart.Position - hrp.Position).Magnitude
+                if d < dist then
+                    dist = d
+                    nearest = v
                 end
             end
         end
@@ -54,79 +67,115 @@ function FindBlobman()
 end
 
 function SpawnBlobman()
+    -- ゲーム固有のリモートを探して発火させる試み
     local args = { [1] = "Blobman" }
-    local spawned = false
-    local remotes = {
-        ReplicatedStorage:FindFirstChild("SpawnItem"),
-        ReplicatedStorage:FindFirstChild("CreateItem"),
-        Workspace:FindFirstChild("SpawnEvents")
+    local possibleRemotes = {
+        "SpawnItem", "CreateItem", "SpawnObject", "RequestSpawn"
     }
-    for _, remote in pairs(remotes) do
+    
+    local fired = false
+    
+    -- ReplicatedStorage内を検索
+    for _, name in pairs(possibleRemotes) do
+        local remote = ReplicatedStorage:FindFirstChild(name, true) -- 再帰的に検索
         if remote and remote:IsA("RemoteEvent") then
             pcall(function()
                 remote:FireServer(unpack(args))
-                spawned = true
+                fired = true
+                print("Fired remote: " .. remote.Name)
             end)
         end
     end
-    if spawned then
-        SendNotif("System", "Blobmanのスポーンを試みました")
+
+    if fired then
+        SendNotif("System", "Spawn信号を送信しました")
     else
-        SendNotif("Warning", "自動スポーンに失敗しました")
+        SendNotif("Warning", "Spawnリモートが見つかりません (手動で出してください)")
     end
 end
 
+-- 攻撃ロジックの完全書き換え
 function TeleportAndAttack(targetName)
     local target = Players:FindFirstChild(targetName)
     local char = LocalPlayer.Character
+    
     if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then 
+        SendNotif("Error", "ターゲットが見つかりません/死んでいます")
+        return 
+    end
     
     local myHrp = char.HumanoidRootPart
     local targetHrp = target.Character.HumanoidRootPart
     
+    -- 元の位置を保存
     if not OriginalPosition then
         OriginalPosition = myHrp.CFrame
     end
     
+    -- 弾薬(Blobman)を探す
     local ammo = FindBlobman()
     if not ammo then
         SpawnBlobman()
-        task.wait(0.2)
+        task.wait(0.1)
         ammo = FindBlobman()
-        if not ammo then return end
-    end
-    
-    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
-        for i = 1, 5 do
-            ammo.HumanoidRootPart.CFrame = myHrp.CFrame * CFrame.new(0, 0, -2)
-            ammo.HumanoidRootPart.Velocity = Vector3.new(0,0,0)
-            RunService.RenderStepped:Wait()
+        if not ammo then 
+            SendNotif("Error", "近くにBlobmanがいません")
+            return 
         end
     end
     
-    myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1)
-    task.wait(0.01)
+    local ammoRoot = ammo:FindFirstChild("HumanoidRootPart") or ammo:FindFirstChild("Torso") or ammo.PrimaryPart
+    if not ammoRoot then return end
+
+    -- Step 1: 物理権限を取得するためにBlobmanへ一瞬テレポート
+    local oldCFrame = myHrp.CFrame
+    myHrp.CFrame = ammoRoot.CFrame
+    task.wait(0.1) -- サーバー認識待ち
     
+    -- Step 2: 回転力の付与
     local bv = Instance.new("BodyAngularVelocity")
     bv.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bv.AngularVelocity = Vector3.new(500, 500, 500)
+    bv.AngularVelocity = Vector3.new(0, 1000, 0) -- Y軸回転
     bv.Parent = myHrp
     
-    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
-        ammo.HumanoidRootPart.CFrame = targetHrp.CFrame
-        ammo.HumanoidRootPart.Velocity = (targetHrp.Position - myHrp.Position).Unit * 1000
+    -- Step 3: ターゲットへ突撃 (RunServiceで位置を強制固定し続ける)
+    local startTime = tick()
+    local connection
+    
+    -- 0.35秒間ヒット処理を実行
+    connection = RunService.Heartbeat:Connect(function()
+        if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+            connection:Disconnect()
+            return
+        end
+        
+        -- 自分の位置を相手に重ねる
+        myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 0)
+        myHrp.Velocity = Vector3.new(0, 0, 0) -- 自分が吹っ飛ばないようにリセット
+        
+        -- Blobmanを自分の前に強制固定（これが攻撃判定になる）
+        if ammoRoot then
+            ammoRoot.CFrame = myHrp.CFrame * CFrame.new(0, 0, -2)
+            ammoRoot.Velocity = (targetHrp.Position - myHrp.Position).Unit * 500
+            ammoRoot.RotVelocity = Vector3.new(100, 100, 100)
+        end
+    end)
+    
+    task.wait(0.35) -- 攻撃持続時間
+    
+    if connection then connection:Disconnect() end
+    if bv then bv:Destroy() end
+    
+    -- Step 4: 帰還
+    if OriginalPosition then
+        myHrp.CFrame = OriginalPosition
+        myHrp.Velocity = Vector3.new(0,0,0)
+        OriginalPosition = nil
     end
-    
-    task.wait(0.05)
-    bv:Destroy()
-    
-    myHrp.CFrame = OriginalPosition
-    myHrp.Velocity = Vector3.new(0,0,0)
-    OriginalPosition = nil
 end
 
--- ■■■ UI Construction ■■■
+-- ■■■ UI Construction (User Provided Design) ■■■
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "SyuHubUI"
 ScreenGui.ResetOnSpawn = false
@@ -244,6 +293,7 @@ DropdownMenu.BorderColor3 = Color3.fromRGB(60, 60, 60)
 DropdownMenu.Visible = false
 DropdownMenu.ClipsDescendants = true
 DropdownMenu.Parent = ScrollFrame
+DropdownMenu.ZIndex = 5 -- 重なり順を上げる
 
 local MenuCorner = Instance.new("UICorner")
 MenuCorner.CornerRadius = UDim.new(0, 6)
@@ -255,6 +305,7 @@ MenuScroll.BackgroundTransparency = 1
 MenuScroll.BorderSizePixel = 0
 MenuScroll.ScrollBarThickness = 4
 MenuScroll.Parent = DropdownMenu
+MenuScroll.ZIndex = 6
 
 local MenuLayout = Instance.new("UIListLayout")
 MenuLayout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -279,11 +330,18 @@ local function UpdatePlayerList()
         btn.Font = Enum.Font.Gotham
         btn.TextSize = 13
         btn.Parent = MenuScroll
+        btn.ZIndex = 7
         
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0, 4)
+        btnCorner.Parent = btn
+
         btn.MouseButton1Click:Connect(function()
             TargetPlayer = playerName
             PlayerDropdown.Text = "✓ " .. playerName
-            DropdownMenu.Visible = false
+            DropdownMenu:TweenSize(UDim2.new(1, 0, 0, 0), "Out", "Quad", 0.2, true, function()
+                DropdownMenu.Visible = false
+            end)
             SendNotif("Selected", "Target: " .. playerName)
         end)
     end
@@ -331,6 +389,7 @@ end
 local KickBtn = CreateButton("🎯 Kick Target (Hit & Run)", UDim2.new(0, 0, 0, 230), function()
     if TargetPlayer then
         SendNotif("Kicking", "Attacking " .. TargetPlayer)
+        -- 非同期処理でUIをフリーズさせない
         task.spawn(function()
             TeleportAndAttack(TargetPlayer)
         end)
@@ -342,6 +401,7 @@ end, Color3.fromRGB(60, 80, 120))
 -- Loop Kick ボタン
 local LoopBtn = CreateButton("🔄 Loop Kick: OFF", UDim2.new(0, 0, 0, 280), function()
     IsLoopKicking = not IsLoopKicking
+    
     if IsLoopKicking then
         if not TargetPlayer then
             SendNotif("Error", "プレイヤーを選択してください")
@@ -351,11 +411,16 @@ local LoopBtn = CreateButton("🔄 Loop Kick: OFF", UDim2.new(0, 0, 0, 280), fun
         LoopBtn.Text = "🔄 Loop Kick: ON"
         LoopBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 60)
         SendNotif("Loop Kick", "Loop started for " .. TargetPlayer)
+        
         task.spawn(function()
-            while IsLoopKicking and TargetPlayer do
+            while IsLoopKicking and TargetPlayer and Players:FindFirstChild(TargetPlayer) do
                 TeleportAndAttack(TargetPlayer)
-                task.wait(0.1)
+                task.wait(0.1) -- 攻撃間隔
             end
+            -- ループが終了したらUIを戻す
+            IsLoopKicking = false
+            LoopBtn.Text = "🔄 Loop Kick: OFF"
+            LoopBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
         end)
     else
         LoopBtn.Text = "🔄 Loop Kick: OFF"
@@ -367,24 +432,33 @@ end, Color3.fromRGB(45, 45, 55))
 -- Kick ALL ボタン
 local KickAllBtn = CreateButton("💀 Kick ALL: OFF", UDim2.new(0, 0, 0, 330), function()
     IsAllKicking = not IsAllKicking
-    IsLoopKicking = false
-    LoopBtn.Text = "🔄 Loop Kick: OFF"
-    LoopBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+    IsLoopKicking = false -- ループキックは止める
     
     if IsAllKicking then
         KickAllBtn.Text = "💀 Kick ALL: ON"
         KickAllBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
         SendNotif("ALL KICK", "Starting massacre...")
+        
         task.spawn(function()
             while IsAllKicking do
-                for _, p in pairs(Players:GetPlayers()) do
-                    if p ~= LocalPlayer and IsAllKicking then
-                        TeleportAndAttack(p.Name)
-                        task.wait(0.2)
-                    end
+                local victims = GetPlayerNames()
+                if #victims == 0 then break end
+                
+                for _, name in pairs(victims) do
+                    if not IsAllKicking then break end
+                    TargetPlayer = name -- 現在のターゲットを更新（UI表示用）
+                    PlayerDropdown.Text = "💀 " .. name
+                    TeleportAndAttack(name)
+                    task.wait(0.2)
                 end
-                task.wait(0.1)
+                task.wait(0.5)
             end
+            
+            -- 終了処理
+            IsAllKicking = false
+            KickAllBtn.Text = "💀 Kick ALL: OFF"
+            KickAllBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+            SendNotif("Stopped", "All Kick Stopped")
         end)
     else
         KickAllBtn.Text = "💀 Kick ALL: OFF"
@@ -411,17 +485,18 @@ end, Color3.fromRGB(50, 90, 50))
 MinimizeBtn.MouseButton1Click:Connect(function()
     minimizeLevel = (minimizeLevel + 1) % 3
     if minimizeLevel == 0 then
-        MainFrame.Size = UDim2.new(0, 350, 0, 400)
+        MainFrame:TweenSize(UDim2.new(0, 350, 0, 400), "Out", "Quad", 0.3, true)
         MinimizeBtn.Text = "−"
+        task.wait(0.2)
         ScrollFrame.Visible = true
     elseif minimizeLevel == 1 then
-        MainFrame.Size = UDim2.new(0, 350, 0, 40)
+        ScrollFrame.Visible = false
+        MainFrame:TweenSize(UDim2.new(0, 350, 0, 40), "Out", "Quad", 0.3, true)
         MinimizeBtn.Text = "■"
-        ScrollFrame.Visible = false
     else
-        MainFrame.Size = UDim2.new(0, 150, 0, 40)
-        MinimizeBtn.Text = "☆"
         ScrollFrame.Visible = false
+        MainFrame:TweenSize(UDim2.new(0, 150, 0, 40), "Out", "Quad", 0.3, true)
+        MinimizeBtn.Text = "☆"
     end
 end)
 
@@ -464,8 +539,4 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 -- 初期化完了
-wait(0.5)
-SendNotif("Syu_hub", "v6.0 完全修正版ロード完了!")
-print("=== Syu_hub v6.0 Fixed Version ===")
-print("All buttons are now functional!")
-print("Ready to kick!")
+SendNotif("Syu_hub", "v6.0 REPAIRED Loaded!")
