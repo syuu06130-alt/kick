@@ -1,7 +1,7 @@
 --[[
-    Syu_hub v8.1 | Player Select Fixed
+    Syu_hub v8.2 | Player Select Fixed Final
     Target: Fling Things and People
-    Fix: Dropdown Menu ZIndex & Click Event
+    Fix: Dropdown Logic & Player List Refresh
 ]]
 
 -- ■■■ Services ■■■
@@ -18,17 +18,18 @@ local IsAttacking = false
 local OriginalPosition = nil
 local MinimizeLevel = 0 -- 0:Max, 1:Bar, 2:Small
 
--- ■■■ Utility Functions ■■■
+-- ■■■ Utility Functions (Ref: User Provided) ■■■
 
-function SendNotif(title, content)
+local function Notify(msg)
     game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = title;
-        Text = content;
-        Duration = 2;
+        Title = "Syu_hub";
+        Text = msg;
+        Duration = 3;
     })
+    print("[Syu_hub] " .. msg)
 end
 
-function GetPlayerNames()
+local function GetPlayerNames()
     local names = {}
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
@@ -38,7 +39,8 @@ function GetPlayerNames()
     return names
 end
 
--- Blobmanを探す
+-- ■■■ Logic Functions (Kept as requested) ■■■
+
 function GetBlobman()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -95,7 +97,7 @@ function TriggerThrow()
     end
 end
 
--- ■■■ メイン攻撃ロジック (0.01秒ループ) ■■■
+-- ■■■ Attack Loop (0.01s) ■■■
 function StartLoopAttack(targetName)
     local target = Players:FindFirstChild(targetName)
     if not target then return end
@@ -143,21 +145,21 @@ function StartLoopAttack(targetName)
         hrp.Velocity = Vector3.new(0,0,0)
         OriginalPosition = nil
     end
-    SendNotif("System", "Loop Finished.")
+    Notify("Loop Finished.")
 end
 
 
 -- ■■■ UI Construction ■■■
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SyuHub_Fixed_v8_1"
+ScreenGui.Name = "SyuHub_Fixed_v8_2"
 ScreenGui.ResetOnSpawn = false
-if game.CoreGui:FindFirstChild("SyuHub_Fixed_v8_1") then
-    game.CoreGui.SyuHub_Fixed_v8_1:Destroy()
+if game.CoreGui:FindFirstChild("SyuHub_Fixed_v8_2") then
+    game.CoreGui.SyuHub_Fixed_v8_2:Destroy()
 end
 ScreenGui.Parent = game.CoreGui
 
--- メインフレーム
+-- Main Frame
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 350, 0, 400)
@@ -166,13 +168,13 @@ MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 MainFrame.BorderSizePixel = 1
 MainFrame.BorderColor3 = Color3.fromRGB(60, 60, 100)
 MainFrame.Parent = ScreenGui
-MainFrame.ClipsDescendants = false -- ドロップダウンがはみ出ても見えるように変更
+MainFrame.ClipsDescendants = true 
 
 local UICorner = Instance.new("UICorner")
 UICorner.CornerRadius = UDim.new(0, 10)
 UICorner.Parent = MainFrame
 
--- タイトルバー
+-- Title Bar
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 40)
 TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
@@ -184,7 +186,7 @@ TitleCorner.Parent = TitleBar
 local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, -50, 1, 0)
 TitleText.Position = UDim2.new(0, 10, 0, 0)
-TitleText.Text = "Syu_hub v8.1 | Select Fixed"
+TitleText.Text = "Syu_hub v8.2 | Select Fixed"
 TitleText.TextColor3 = Color3.fromRGB(200, 200, 255)
 TitleText.BackgroundTransparency = 1
 TitleText.Font = Enum.Font.GothamBold
@@ -192,7 +194,6 @@ TitleText.TextSize = 16
 TitleText.TextXAlignment = Enum.TextXAlignment.Left
 TitleText.Parent = TitleBar
 
--- 最小化ボタン
 local MinBtn = Instance.new("TextButton")
 MinBtn.Size = UDim2.new(0, 30, 0, 30)
 MinBtn.Position = UDim2.new(1, -40, 0, 5)
@@ -202,7 +203,7 @@ MinBtn.TextColor3 = Color3.new(1,1,1)
 MinBtn.Parent = TitleBar
 Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
 
--- コンテンツエリア
+-- Content Area
 local ScrollFrame = Instance.new("ScrollingFrame")
 ScrollFrame.Size = UDim2.new(1, -20, 1, -50)
 ScrollFrame.Position = UDim2.new(0, 10, 0, 45)
@@ -210,88 +211,101 @@ ScrollFrame.BackgroundTransparency = 1
 ScrollFrame.BorderSizePixel = 0
 ScrollFrame.Parent = MainFrame
 
--- ■■■ 修正箇所: プレイヤー選択ドロップダウン ■■■
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = ScrollFrame
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 10)
+
+-- ■■■ FIXED: Dropdown Section ■■■
 
 local DropdownBtn = Instance.new("TextButton")
 DropdownBtn.Size = UDim2.new(1, 0, 0, 40)
-DropdownBtn.Position = UDim2.new(0, 0, 0, 0)
-DropdownBtn.Text = "Target: Select Player ▼"
+DropdownBtn.LayoutOrder = 1
+DropdownBtn.Text = "Select Player ▼"
 DropdownBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 DropdownBtn.TextColor3 = Color3.new(1,1,1)
 DropdownBtn.Font = Enum.Font.Gotham
 DropdownBtn.TextSize = 14
-DropdownBtn.ZIndex = 10 -- 優先度を高く設定
 DropdownBtn.Parent = ScrollFrame
 Instance.new("UICorner", DropdownBtn).CornerRadius = UDim.new(0, 6)
 
--- リスト表示用フレーム（ZIndexを高くする）
-local PlayerListFrame = Instance.new("ScrollingFrame")
-PlayerListFrame.Size = UDim2.new(1, 0, 0, 150)
-PlayerListFrame.Position = UDim2.new(0, 0, 0, 45) -- ボタンの直下
-PlayerListFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-PlayerListFrame.Visible = false
-PlayerListFrame.ZIndex = 20 -- 他のボタンより手前に表示させる
-PlayerListFrame.Parent = ScrollFrame
-Instance.new("UICorner", PlayerListFrame).CornerRadius = UDim.new(0, 6)
+-- Container for the list items
+local PlayerListContainer = Instance.new("Frame")
+PlayerListContainer.LayoutOrder = 2
+PlayerListContainer.Size = UDim2.new(1, 0, 0, 0) -- Initially 0 height
+PlayerListContainer.BackgroundTransparency = 1
+PlayerListContainer.ClipsDescendants = true
+PlayerListContainer.Parent = ScrollFrame
+PlayerListContainer.Visible = false
 
-local ListLayout = Instance.new("UIListLayout")
-ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ListLayout.Parent = PlayerListFrame
+local ContainerLayout = Instance.new("UIListLayout")
+ContainerLayout.Parent = PlayerListContainer
+ContainerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ContainerLayout.Padding = UDim.new(0, 5)
 
 local isDropdownOpen = false
 
 DropdownBtn.MouseButton1Click:Connect(function()
     isDropdownOpen = not isDropdownOpen
-    PlayerListFrame.Visible = isDropdownOpen
     
     if isDropdownOpen then
-        -- 既存のリストをクリア
-        for _, c in pairs(PlayerListFrame:GetChildren()) do
-            if c:IsA("TextButton") then c:Destroy() end
+        -- Refresh list
+        for _, child in pairs(PlayerListContainer:GetChildren()) do
+            if child:IsA("TextButton") then child:Destroy() end
         end
         
-        local players = GetPlayerNames()
+        local players = GetPlayerNames() -- Using your function
+        local count = 0
         
-        -- キャンバスサイズを調整
-        PlayerListFrame.CanvasSize = UDim2.new(0, 0, 0, #players * 35)
-
-        for i, name in ipairs(players) do
+        for _, name in ipairs(players) do
+            count = count + 1
             local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, -10, 0, 35) -- スクロールバー用に少し幅を減らす
+            btn.Size = UDim2.new(1, 0, 0, 30)
             btn.Text = name
             btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
             btn.TextColor3 = Color3.new(1,1,1)
             btn.Font = Enum.Font.Gotham
             btn.TextSize = 14
-            btn.ZIndex = 25 -- 最前面
-            btn.Parent = PlayerListFrame
+            btn.Parent = PlayerListContainer
             Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
             
             btn.MouseButton1Click:Connect(function()
                 TargetPlayerName = name
                 DropdownBtn.Text = "Target: " .. name
-                SendNotif("Select", "Target set to: " .. name)
+                Notify("Selected: " .. name)
                 
-                -- 閉じる処理
+                -- Close menu
                 isDropdownOpen = false
-                PlayerListFrame.Visible = false
+                PlayerListContainer.Visible = false
+                PlayerListContainer.Size = UDim2.new(1, 0, 0, 0)
+                ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 50)
             end)
         end
+        
+        -- Resize container and ScrollFrame
+        local height = count * 35
+        PlayerListContainer.Size = UDim2.new(1, 0, 0, height)
+        PlayerListContainer.Visible = true
+        
+        -- Update ScrollFrame canvas
+        ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + height + 100)
+    else
+        PlayerListContainer.Visible = false
+        PlayerListContainer.Size = UDim2.new(1, 0, 0, 0)
+        ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
     end
 end)
 
--- ■■■ その他のUI要素（位置を調整） ■■■
+-- ■■■ Other Buttons ■■■
 
--- 攻撃開始/停止ボタン
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Size = UDim2.new(1, 0, 0, 50)
-ToggleBtn.Position = UDim2.new(0, 0, 0, 210) -- ドロップダウンと被らないように下に配置
+ToggleBtn.LayoutOrder = 3
 ToggleBtn.Text = "START LOOP (OFF)"
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 40)
 ToggleBtn.TextColor3 = Color3.new(1,1,1)
 ToggleBtn.Font = Enum.Font.GothamBold
 ToggleBtn.TextSize = 16
-ToggleBtn.ZIndex = 1
 ToggleBtn.Parent = ScrollFrame
 Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
 
@@ -300,7 +314,7 @@ ToggleBtn.MouseButton1Click:Connect(function()
     
     if IsAttacking then
         if not TargetPlayerName then
-            SendNotif("Error", "プレイヤーを選択してください")
+            Notify("Select a player first!")
             IsAttacking = false
             return
         end
@@ -320,14 +334,12 @@ ToggleBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- 手動Blobmanスポーンボタン
 local SpawnBtn = Instance.new("TextButton")
 SpawnBtn.Size = UDim2.new(1, 0, 0, 40)
-SpawnBtn.Position = UDim2.new(0, 0, 0, 270)
+SpawnBtn.LayoutOrder = 4
 SpawnBtn.Text = "Spawn Blobman Only"
 SpawnBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
 SpawnBtn.TextColor3 = Color3.new(1,1,1)
-SpawnBtn.ZIndex = 1
 SpawnBtn.Parent = ScrollFrame
 Instance.new("UICorner", SpawnBtn).CornerRadius = UDim.new(0, 8)
 
@@ -335,7 +347,8 @@ SpawnBtn.MouseButton1Click:Connect(function()
     SpawnBlobman()
 end)
 
--- 最小化ロジック
+-- ■■■ Window Features ■■■
+
 MinBtn.MouseButton1Click:Connect(function()
     MinimizeLevel = (MinimizeLevel + 1) % 3
     if MinimizeLevel == 0 then
@@ -356,7 +369,6 @@ MinBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ドラッグ機能
 local dragging, dragInput, dragStart, startPos
 TitleBar.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -382,4 +394,4 @@ UserInputService.InputChanged:Connect(function(input)
     end
 end)
 
-SendNotif("Syu_hub", "Select Fixed & Ready")
+Notify("Syu_hub Fixed Loaded")
