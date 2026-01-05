@@ -1,8 +1,7 @@
 --[[
-    Syu_hub v8.3 | Multi-Target Support & Auto Blobman
+    Syu_hub v6.1 | Blobman Kicker & Auto Grab
     Target: Fling Things and People
-    Features: Auto-Spawn Blobman, Single/All Kick, Toggle On/Off
-    Fix: Reaction Issues, Enhanced Loop for Grab-Throw Cycle
+    Status: Fixed (NaN Crash & Black Screen Resolved)
 ]]
 
 -- ■■■ Services ■■■
@@ -14,27 +13,27 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 
 -- ■■■ Variables ■■■
-local TargetPlayerNames = {}  -- Now supports multiple targets (table)
-local IsAttacking = false
+local TargetPlayer = nil
+local IsLoopKicking = false
+local IsAllKicking = false
 local OriginalPosition = nil
-local MinimizeLevel = 0 -- 0:Max, 1:Bar, 2:Small
+local minimizeLevel = 0
 
 -- ■■■ Utility Functions ■■■
-
-local function Notify(msg)
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "Syu_hub";
-        Text = msg;
-        Duration = 3;
-    })
-    print("[Syu_hub] " .. msg)
+function SendNotif(title, content)
+    print("[" .. title .. "] " .. content)
+    -- スターターGUIが使える場合は通知を出す（オプション）
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title;
+            Text = content;
+            Duration = 3;
+        })
+    end)
 end
 
-local function GetPlayerNames(includeAll)
+function GetPlayerNames()
     local names = {}
-    if includeAll then
-        table.insert(names, "All Players")
-    end
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
             table.insert(names, p.Name)
@@ -43,411 +42,363 @@ local function GetPlayerNames(includeAll)
     return names
 end
 
--- ■■■ Logic Functions ■■■
-
-function GetBlobman()
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    
-    local blobman = nil
-    local shortestDist = 500
-    
+function FindBlobman()
+    local nearest, dist = nil, 500
     for _, v in pairs(Workspace:GetDescendants()) do
-        if v:IsA("Model") and (v.Name == "Blobman" or v.Name == "Ragdoll") and not Players:GetPlayerFromCharacter(v) then
-            local root = v:FindFirstChild("HumanoidRootPart") or v:FindFirstChild("Torso")
-            if root then
-                if hrp then
-                    local dist = (root.Position - hrp.Position).Magnitude
-                    if dist < shortestDist then
-                        shortestDist = dist
-                        blobman = v
+        if (v.Name == "Blobman" or v.Name == "Ragdoll") and v:IsA("Model") and v:FindFirstChild("HumanoidRootPart") then
+            if not Players:GetPlayerFromCharacter(v) then
+                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if hrp and v.HumanoidRootPart then
+                    local d = (v.HumanoidRootPart.Position - hrp.Position).Magnitude
+                    if d < dist then
+                        dist = d
+                        nearest = v
                     end
-                else
-                    blobman = v
                 end
             end
         end
     end
-    return blobman
+    return nearest
 end
 
 function SpawnBlobman()
     local args = { [1] = "Blobman" }
-    for _, desc in pairs(ReplicatedStorage:GetDescendants()) do
-        if desc:IsA("RemoteEvent") and (string.find(desc.Name:lower(), "spawn") or string.find(desc.Name:lower(), "create")) then
-            pcall(function() desc:FireServer(unpack(args)) end)
+    local spawned = false
+    local remotes = {
+        ReplicatedStorage:FindFirstChild("SpawnItem"),
+        ReplicatedStorage:FindFirstChild("CreateItem"),
+        Workspace:FindFirstChild("SpawnEvents")
+    }
+    for _, remote in pairs(remotes) do
+        if remote and remote:IsA("RemoteEvent") then
+            pcall(function()
+                remote:FireServer(unpack(args))
+                spawned = true
+            end)
         end
     end
-    -- Wait briefly for spawn
-    task.wait(0.1)
-end
-
-function TriggerGrab(part)
-    for _, desc in pairs(LocalPlayer.Character:GetDescendants()) do
-        if desc:IsA("RemoteEvent") and (string.find(desc.Name:lower(), "grab") or string.find(desc.Name:lower(), "interact")) then
-            pcall(function() desc:FireServer(part) end)
-        end
-    end
-    for _, desc in pairs(ReplicatedStorage:GetDescendants()) do
-        if desc:IsA("RemoteEvent") and (string.find(desc.Name:lower(), "grab") or string.find(desc.Name:lower(), "interact")) then
-            pcall(function() desc:FireServer(part) end)
-        end
+    if spawned then
+        SendNotif("System", "Spawn request sent")
     end
 end
 
-function TriggerThrow()
-    for _, desc in pairs(ReplicatedStorage:GetDescendants()) do
-        if desc:IsA("RemoteEvent") and (string.find(desc.Name:lower(), "throw") or string.find(desc.Name:lower(), "release")) then
-            pcall(function() desc:FireServer(Vector3.new(0, 100, 0)) end)  -- Increased throw force for better fling
-        end
-    end
-end
-
--- ■■■ Attack Loop (Enhanced for Multi-Target & Auto Blobman) ■■■
-function StartLoopAttack(targets)
+-- ■■■ Core Attack Logic (Fixed NaN Crash) ■■■
+function TeleportAndAttack(targetName)
+    local target = Players:FindFirstChild(targetName)
     local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    if not OriginalPosition then OriginalPosition = hrp.CFrame end
-    local startTime = tick()
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
     
-    while IsAttacking and (tick() - startTime < 60) do
-        for _, targetName in ipairs(targets) do
-            if not IsAttacking then break end
-            local target = Players:FindFirstChild(targetName)
-            if target and target.Character then
-                local targetHrp = target.Character:FindFirstChild("HumanoidRootPart")
-                if targetHrp then
-                    -- Auto-Spawn Blobman if not found
-                    local ammo = GetBlobman()
-                    if not ammo then
-                        SpawnBlobman()
-                        ammo = GetBlobman()
-                    end
-                    
-                    if ammo then
-                        -- Move to target (0.01s simulation)
-                        hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, -2)  -- Position behind target for grab
-                        task.wait(0.01)
-                        
-                        -- Position Blobman for grab
-                        local ammoRoot = ammo:FindFirstChild("HumanoidRootPart") or ammo:FindFirstChild("Torso")
-                        if ammoRoot then
-                            ammoRoot.CFrame = hrp.CFrame * CFrame.new(0, 0, -1)
-                            ammoRoot.Velocity = Vector3.zero
-                            ammoRoot.AssemblyLinearVelocity = Vector3.zero
-                        end
-                        
-                        -- Grab with Blobman (assuming game mechanics handle Blobman as tool)
-                        TriggerGrab(targetHrp)
-                        task.wait(0.01)
-                        
-                        -- Return to original position (0.01s)
-                        hrp.CFrame = OriginalPosition
-                        task.wait(0.01)
-                        
-                        -- Throw and repeat grab-throw cycle
-                        hrp.Velocity = hrp.CFrame.LookVector * 100 + Vector3.new(0, 50, 0)
-                        TriggerThrow()
-                        task.wait(0.01)
-                        
-                        -- Quick re-grab simulation for cycle
-                        TriggerGrab(targetHrp)
-                        task.wait(0.01)
-                    end
-                end
-            end
-        end
-        task.wait(0.05)  -- Slight delay to prevent overload
+    local myHrp = char.HumanoidRootPart
+    local targetHrp = target.Character.HumanoidRootPart
+    local humanoid = char:FindFirstChild("Humanoid")
+    
+    -- 位置保存
+    if not OriginalPosition then
+        OriginalPosition = myHrp.CFrame
     end
-
-    IsAttacking = false
-    if OriginalPosition and hrp then
-        hrp.CFrame = OriginalPosition
-        hrp.Velocity = Vector3.zero
-        hrp.AssemblyLinearVelocity = Vector3.zero
+    
+    -- 弾（Blobman）の確保
+    local ammo = FindBlobman()
+    if not ammo then
+        SpawnBlobman()
+        task.wait(0.2)
+        ammo = FindBlobman()
+        if not ammo then return end
+    end
+    
+    -- 弾の準備（CFrame操作時の安全策）
+    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+        local safeCFrame = myHrp.CFrame * CFrame.new(0, 0, -2)
+        for i = 1, 3 do
+            if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+                ammo.HumanoidRootPart.CFrame = safeCFrame
+                ammo.HumanoidRootPart.Velocity = Vector3.zero
+                ammo.HumanoidRootPart.RotVelocity = Vector3.zero
+            end
+            RunService.RenderStepped:Wait()
+        end
+    end
+    
+    -- ターゲットへテレポート
+    myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1)
+    
+    -- 回転力を付与
+    local bv = Instance.new("BodyAngularVelocity")
+    bv.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bv.AngularVelocity = Vector3.new(500, 500, 500)
+    bv.Parent = myHrp
+    
+    -- 攻撃実行（NaNチェック付き）
+    if ammo and ammo:FindFirstChild("HumanoidRootPart") then
+        ammo.HumanoidRootPart.CFrame = targetHrp.CFrame
+        
+        local direction = targetHrp.Position - myHrp.Position
+        -- 距離が極端に近い場合の0除算回避
+        if direction.Magnitude > 0.1 then
+            ammo.HumanoidRootPart.Velocity = direction.Unit * 1000
+        else
+            -- 重なっている場合は上へ飛ばす
+            ammo.HumanoidRootPart.Velocity = Vector3.new(0, 1000, 0)
+        end
+    end
+    
+    task.wait(0.05)
+    if bv then bv:Destroy() end
+    
+    -- 元の位置へ戻る
+    if OriginalPosition then
+        myHrp.CFrame = OriginalPosition
+        myHrp.Velocity = Vector3.zero
+        myHrp.RotVelocity = Vector3.zero
         OriginalPosition = nil
     end
-    Notify("Loop Finished.")
+    
+    -- ■■ カメラ修正（ブラックアウト対策） ■■
+    if humanoid then
+        Workspace.CurrentCamera.CameraSubject = humanoid
+    end
 end
 
 -- ■■■ UI Construction ■■■
+-- 既存のGUIがあれば削除
+if game.CoreGui:FindFirstChild("SyuHubUI") then
+    game.CoreGui.SyuHubUI:Destroy()
+end
+if LocalPlayer.PlayerGui:FindFirstChild("SyuHubUI") then
+    LocalPlayer.PlayerGui.SyuHubUI:Destroy()
+end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "SyuHub_v8_3"
+ScreenGui.Name = "SyuHubUI"
 ScreenGui.ResetOnSpawn = false
-if game.CoreGui:FindFirstChild("SyuHub_v8_3") then
-    game.CoreGui.SyuHub_v8_3:Destroy()
-end
-ScreenGui.Parent = game.CoreGui
 
--- Main Frame
+-- 親の設定（安全策）
+if LocalPlayer:FindFirstChild("PlayerGui") then
+    ScreenGui.Parent = LocalPlayer.PlayerGui
+else
+    ScreenGui.Parent = game.CoreGui
+end
+
+-- メインフレーム
 local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 350, 0, 400)
 MainFrame.Position = UDim2.new(0.5, -175, 0.3, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 MainFrame.BorderSizePixel = 1
-MainFrame.BorderColor3 = Color3.fromRGB(60, 60, 100)
+MainFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
 MainFrame.Parent = ScreenGui
-MainFrame.ClipsDescendants = true 
+MainFrame.Active = true
+MainFrame.Draggable = true -- シンプルなドラッグ有効化
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 10)
-UICorner.Parent = MainFrame
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 12)
+Corner.Parent = MainFrame
 
--- Title Bar
+-- タイトルバー
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, 40)
-TitleBar.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+TitleBar.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+TitleBar.BorderSizePixel = 0
 TitleBar.Parent = MainFrame
+
 local TitleCorner = Instance.new("UICorner")
-TitleCorner.CornerRadius = UDim.new(0, 10)
+TitleCorner.CornerRadius = UDim.new(0, 12)
 TitleCorner.Parent = TitleBar
 
-local TitleText = Instance.new("TextLabel")
-TitleText.Size = UDim2.new(1, -50, 1, 0)
-TitleText.Position = UDim2.new(0, 10, 0, 0)
-TitleText.Text = "Syu_hub v8.3 | Multi Fixed"
-TitleText.TextColor3 = Color3.fromRGB(200, 200, 255)
-TitleText.BackgroundTransparency = 1
-TitleText.Font = Enum.Font.GothamBold
-TitleText.TextSize = 16
-TitleText.TextXAlignment = Enum.TextXAlignment.Left
-TitleText.Parent = TitleBar
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -80, 1, 0)
+TitleLabel.Position = UDim2.new(0, 10, 0, 0)
+TitleLabel.Text = "Syu_hub v6.1 Stable"
+TitleLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 18
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TitleBar
 
-local MinBtn = Instance.new("TextButton")
-MinBtn.Size = UDim2.new(0, 30, 0, 30)
-MinBtn.Position = UDim2.new(1, -40, 0, 5)
-MinBtn.Text = "-"
-MinBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-MinBtn.TextColor3 = Color3.new(1,1,1)
-MinBtn.Parent = TitleBar
-Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 6)
+-- 最小化ボタン
+local MinimizeBtn = Instance.new("TextButton")
+MinimizeBtn.Size = UDim2.new(0, 30, 0, 30)
+MinimizeBtn.Position = UDim2.new(1, -70, 0, 5)
+MinimizeBtn.Text = "−"
+MinimizeBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+MinimizeBtn.TextColor3 = Color3.new(1,1,1)
+MinimizeBtn.Font = Enum.Font.GothamBold
+MinimizeBtn.TextSize = 20
+MinimizeBtn.Parent = TitleBar
+Instance.new("UICorner", MinimizeBtn).CornerRadius = UDim.new(0, 8)
 
--- Content Area
+-- 閉じるボタン
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+CloseBtn.Text = "×"
+CloseBtn.BackgroundColor3 = Color3.fromRGB(80, 30, 30)
+CloseBtn.TextColor3 = Color3.new(1,1,1)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 20
+CloseBtn.Parent = TitleBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
+
+-- コンテンツエリア
 local ScrollFrame = Instance.new("ScrollingFrame")
 ScrollFrame.Size = UDim2.new(1, -20, 1, -50)
 ScrollFrame.Position = UDim2.new(0, 10, 0, 45)
 ScrollFrame.BackgroundTransparency = 1
 ScrollFrame.BorderSizePixel = 0
+ScrollFrame.ScrollBarThickness = 6
+ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 550)
 ScrollFrame.Parent = MainFrame
-ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)  -- Auto-size
 
-local UIListLayout = Instance.new("UIListLayout")
-UIListLayout.Parent = ScrollFrame
-UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-UIListLayout.Padding = UDim.new(0, 10)
+-- プレイヤー選択
+local PlayerDropdown = Instance.new("TextButton")
+PlayerDropdown.Size = UDim2.new(1, 0, 0, 35)
+PlayerDropdown.Position = UDim2.new(0, 0, 0, 10)
+PlayerDropdown.Text = "▼ Select Target"
+PlayerDropdown.TextColor3 = Color3.new(1,1,1)
+PlayerDropdown.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+PlayerDropdown.Font = Enum.Font.Gotham
+PlayerDropdown.TextSize = 14
+PlayerDropdown.Parent = ScrollFrame
+Instance.new("UICorner", PlayerDropdown).CornerRadius = UDim.new(0, 6)
 
--- ■■■ Dropdown Section (With All Players) ■■■
+local DropdownMenu = Instance.new("ScrollingFrame")
+DropdownMenu.Size = UDim2.new(1, 0, 0, 0) -- 初期は閉じる
+DropdownMenu.Position = UDim2.new(0, 0, 0, 50)
+DropdownMenu.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+DropdownMenu.Visible = false
+DropdownMenu.Parent = ScrollFrame
+Instance.new("UICorner", DropdownMenu).CornerRadius = UDim.new(0, 6)
+local MenuLayout = Instance.new("UIListLayout")
+MenuLayout.Parent = DropdownMenu
 
-local DropdownBtn = Instance.new("TextButton")
-DropdownBtn.Size = UDim2.new(1, 0, 0, 40)
-DropdownBtn.LayoutOrder = 1
-DropdownBtn.Text = "Select Target ▼"
-DropdownBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-DropdownBtn.TextColor3 = Color3.new(1,1,1)
-DropdownBtn.Font = Enum.Font.Gotham
-DropdownBtn.TextSize = 14
-DropdownBtn.Parent = ScrollFrame
-Instance.new("UICorner", DropdownBtn).CornerRadius = UDim.new(0, 6)
+local function UpdatePlayerList()
+    for _, c in pairs(DropdownMenu:GetChildren()) do
+        if c:IsA("TextButton") then c:Destroy() end
+    end
+    local players = GetPlayerNames()
+    for _, name in pairs(players) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, 0, 0, 30)
+        btn.Text = name
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        btn.Parent = DropdownMenu
+        btn.MouseButton1Click:Connect(function()
+            TargetPlayer = name
+            PlayerDropdown.Text = "Target: " .. name
+            DropdownMenu.Visible = false
+            DropdownMenu.Size = UDim2.new(1, 0, 0, 0)
+        end)
+    end
+    DropdownMenu.CanvasSize = UDim2.new(0,0,0, #players * 30)
+end
 
--- Container for the list items
-local PlayerListContainer = Instance.new("Frame")
-PlayerListContainer.LayoutOrder = 2
-PlayerListContainer.Size = UDim2.new(1, 0, 0, 0) -- Initially 0 height
-PlayerListContainer.BackgroundTransparency = 1
-PlayerListContainer.ClipsDescendants = true
-PlayerListContainer.Parent = ScrollFrame
-PlayerListContainer.Visible = false
-
-local ContainerLayout = Instance.new("UIListLayout")
-ContainerLayout.Parent = PlayerListContainer
-ContainerLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ContainerLayout.Padding = UDim.new(0, 5)
-
-local isDropdownOpen = false
-
-DropdownBtn.MouseButton1Click:Connect(function()
-    isDropdownOpen = not isDropdownOpen
-    
-    if isDropdownOpen then
-        -- Refresh list
-        for _, child in pairs(PlayerListContainer:GetChildren()) do
-            if child:IsA("TextButton") then child:Destroy() end
-        end
-        
-        local players = GetPlayerNames(true)  -- Include "All Players"
-        local count = 0
-        
-        for _, name in ipairs(players) do
-            count = count + 1
-            local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, 0, 0, 30)
-            btn.Text = name
-            btn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-            btn.TextColor3 = Color3.new(1,1,1)
-            btn.Font = Enum.Font.Gotham
-            btn.TextSize = 14
-            btn.Parent = PlayerListContainer
-            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-            
-            btn.MouseButton1Click:Connect(function()
-                if name == "All Players" then
-                    TargetPlayerNames = {}
-                    for _, p in pairs(Players:GetPlayers()) do
-                        if p ~= LocalPlayer then
-                            table.insert(TargetPlayerNames, p.Name)
-                        end
-                    end
-                    DropdownBtn.Text = "Target: All Players"
-                    Notify("Selected: All Players")
-                else
-                    TargetPlayerNames = {name}
-                    DropdownBtn.Text = "Target: " .. name
-                    Notify("Selected: " .. name)
-                end
-                
-                -- Close menu
-                isDropdownOpen = false
-                PlayerListContainer.Visible = false
-                PlayerListContainer.Size = UDim2.new(1, 0, 0, 0)
-                ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 50)
-            end)
-        end
-        
-        -- Resize container and ScrollFrame
-        local height = count * 35
-        PlayerListContainer.Size = UDim2.new(1, 0, 0, height)
-        PlayerListContainer.Visible = true
-        
-        -- Update ScrollFrame canvas
-        ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + height + 100)
+PlayerDropdown.MouseButton1Click:Connect(function()
+    if DropdownMenu.Visible then
+        DropdownMenu.Visible = false
+        DropdownMenu.Size = UDim2.new(1, 0, 0, 0)
     else
-        PlayerListContainer.Visible = false
-        PlayerListContainer.Size = UDim2.new(1, 0, 0, 0)
-        ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y)
+        UpdatePlayerList()
+        DropdownMenu.Visible = true
+        DropdownMenu.Size = UDim2.new(1, 0, 0, 150)
     end
 end)
 
--- ■■■ Toggle Button ■■■
+-- ボタン生成ヘルパー
+local function CreateBtn(text, order, color, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 40)
+    btn.Position = UDim2.new(0, 0, 0, 210 + (order * 50))
+    btn.Text = text
+    btn.BackgroundColor3 = color
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.Parent = ScrollFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
 
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(1, 0, 0, 50)
-ToggleBtn.LayoutOrder = 3
-ToggleBtn.Text = "START LOOP (OFF)"
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 40)
-ToggleBtn.TextColor3 = Color3.new(1,1,1)
-ToggleBtn.Font = Enum.Font.GothamBold
-ToggleBtn.TextSize = 16
-ToggleBtn.Parent = ScrollFrame
-Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
+-- ボタン配置
+CreateBtn("🎯 Kick Target (Hit & Run)", 0, Color3.fromRGB(60, 80, 120), function()
+    if TargetPlayer then
+        SendNotif("Action", "Attacking " .. TargetPlayer)
+        TeleportAndAttack(TargetPlayer)
+    else
+        SendNotif("Error", "Select a player first")
+    end
+end)
 
-ToggleBtn.MouseButton1Click:Connect(function()
-    IsAttacking = not IsAttacking
-    
-    if IsAttacking then
-        if #TargetPlayerNames == 0 then
-            Notify("Select a target first!")
-            IsAttacking = false
-            return
-        end
-        
-        ToggleBtn.Text = "STOP LOOP (ON)"
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(150, 40, 40)
-        
+local LoopBtn
+LoopBtn = CreateBtn("🔄 Loop Kick: OFF", 1, Color3.fromRGB(45, 45, 55), function()
+    IsLoopKicking = not IsLoopKicking
+    if IsLoopKicking then
+        if not TargetPlayer then IsLoopKicking = false return end
+        LoopBtn.Text = "🔄 Loop Kick: ON"
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 60)
         task.spawn(function()
-            StartLoopAttack(TargetPlayerNames)
-            -- Reset after loop ends
-            IsAttacking = false
-            ToggleBtn.Text = "START LOOP (OFF)"
-            ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 40)
+            while IsLoopKicking and TargetPlayer do
+                TeleportAndAttack(TargetPlayer)
+                task.wait(0.15) -- 安定のため少し待機時間を増やす
+            end
+            IsLoopKicking = false
+            LoopBtn.Text = "🔄 Loop Kick: OFF"
+            LoopBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
         end)
     else
-        ToggleBtn.Text = "START LOOP (OFF)"
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 60, 40)
+        LoopBtn.Text = "🔄 Loop Kick: OFF"
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
     end
 end)
 
--- ■■■ Spawn Button ■■■
-
-local SpawnBtn = Instance.new("TextButton")
-SpawnBtn.Size = UDim2.new(1, 0, 0, 40)
-SpawnBtn.LayoutOrder = 4
-SpawnBtn.Text = "Manual Spawn Blobman"
-SpawnBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
-SpawnBtn.TextColor3 = Color3.new(1,1,1)
-SpawnBtn.Parent = ScrollFrame
-Instance.new("UICorner", SpawnBtn).CornerRadius = UDim.new(0, 8)
-
-SpawnBtn.MouseButton1Click:Connect(function()
-    SpawnBlobman()
-    Notify("Blobman Spawned Manually")
-end)
-
--- ■■■ Window Features ■■■
-
-MinBtn.MouseButton1Click:Connect(function()
-    MinimizeLevel = (MinimizeLevel + 1) % 3
-    if MinimizeLevel == 0 then
-        MainFrame:TweenSize(UDim2.new(0, 350, 0, 400), "Out", "Quad", 0.3)
-        ScrollFrame.Visible = true
-        MinBtn.Text = "-"
-        TitleText.Visible = true
-    elseif MinimizeLevel == 1 then
-        MainFrame:TweenSize(UDim2.new(0, 350, 0, 40), "Out", "Quad", 0.3)
-        ScrollFrame.Visible = false
-        MinBtn.Text = "□"
-        TitleText.Visible = true
-    elseif MinimizeLevel == 2 then
-        MainFrame:TweenSize(UDim2.new(0, 120, 0, 40), "Out", "Quad", 0.3)
-        ScrollFrame.Visible = false
-        MinBtn.Text = "Max"
-        TitleText.Visible = false
-    end
-end)
-
-local dragging, dragInput, dragStart, startPos
-TitleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = MainFrame.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
+local KickAllBtn
+KickAllBtn = CreateBtn("💀 Kick ALL: OFF", 2, Color3.fromRGB(45, 45, 55), function()
+    IsAllKicking = not IsAllKicking
+    IsLoopKicking = false
+    if IsAllKicking then
+        KickAllBtn.Text = "💀 Kick ALL: ON"
+        KickAllBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
+        task.spawn(function()
+            while IsAllKicking do
+                for _, p in pairs(Players:GetPlayers()) do
+                    if not IsAllKicking then break end
+                    if p ~= LocalPlayer then
+                        TeleportAndAttack(p.Name)
+                        task.wait(0.1)
+                    end
+                end
+                task.wait(0.5)
             end
         end)
-    end
-end)
-TitleBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
-    end
-end)
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and input == dragInput then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    else
+        KickAllBtn.Text = "💀 Kick ALL: OFF"
+        KickAllBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
     end
 end)
 
--- Initial Canvas Size Update
-ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 50)
-
--- Player Join/Leave Refresh
-Players.PlayerAdded:Connect(function()
-    if isDropdownOpen then
-        DropdownBtn.MouseButton1Click:Invoke()  -- Close and reopen to refresh
-        DropdownBtn.MouseButton1Click:Invoke()
-    end
-end)
-Players.PlayerRemoving:Connect(function()
-    if isDropdownOpen then
-        DropdownBtn.MouseButton1Click:Invoke()  -- Close and reopen to refresh
-        DropdownBtn.MouseButton1Click:Invoke()
-    end
+CreateBtn("🧊 Force Spawn Blobman", 3, Color3.fromRGB(80, 60, 100), function()
+    SpawnBlobman()
 end)
 
-Notify("Syu_hub v8.3 Loaded - Auto Blobman & All Kick Enabled")
+-- ウィンドウ制御
+MinimizeBtn.MouseButton1Click:Connect(function()
+    minimizeLevel = (minimizeLevel + 1) % 2
+    if minimizeLevel == 1 then
+        MainFrame:TweenSize(UDim2.new(0, 350, 0, 40), "Out", "Quad", 0.3, true)
+        ScrollFrame.Visible = false
+    else
+        MainFrame:TweenSize(UDim2.new(0, 350, 0, 400), "Out", "Quad", 0.3, true)
+        ScrollFrame.Visible = true
+    end
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    IsLoopKicking = false
+    IsAllKicking = false
+    ScreenGui:Destroy()
+end)
+
+SendNotif("System", "Syu_hub v6.1 Loaded (Crash Fixed)")
