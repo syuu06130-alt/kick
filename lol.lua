@@ -1,7 +1,7 @@
 --[[
     Syu_hub v6.0 | Blobman Kicker & Auto Grab
     Target: Fling Things and People
-    Custom UI Edition (No External Library)
+    Custom UI Edition - Fixed Version
 ]]
 
 -- ■■■ Services ■■■
@@ -15,8 +15,7 @@ local LocalPlayer = Players.LocalPlayer
 -- ■■■ Variables ■■■
 local TargetPlayer = nil
 local IsLoopKicking = false
-local IsAutoGrabbing = false
-local SelectedAmmo = nil
+local IsAllKicking = false
 local OriginalPosition = nil
 local minimizeLevel = 0
 
@@ -36,9 +35,6 @@ function GetPlayerNames()
 end
 
 function FindBlobman()
-    if LocalPlayer.Character then
-        local tool = LocalPlayer.Character:FindFirstChildWhichIsA("Tool")
-    end
     local nearest, dist = nil, 500
     for _, v in pairs(Workspace:GetDescendants()) do
         if (v.Name == "Blobman" or v.Name == "Ragdoll") and v:IsA("Model") and v:FindFirstChild("HumanoidRootPart") then
@@ -58,9 +54,7 @@ function FindBlobman()
 end
 
 function SpawnBlobman()
-    local args = {
-        [1] = "Blobman"
-    }
+    local args = { [1] = "Blobman" }
     local spawned = false
     local remotes = {
         ReplicatedStorage:FindFirstChild("SpawnItem"),
@@ -69,14 +63,16 @@ function SpawnBlobman()
     }
     for _, remote in pairs(remotes) do
         if remote and remote:IsA("RemoteEvent") then
-            remote:FireServer(unpack(args))
-            spawned = true
+            pcall(function()
+                remote:FireServer(unpack(args))
+                spawned = true
+            end)
         end
     end
     if spawned then
         SendNotif("System", "Blobmanのスポーンを試みました")
     else
-        SendNotif("Warning", "自動スポーンに失敗しました。手動で出してください。")
+        SendNotif("Warning", "自動スポーンに失敗しました")
     end
 end
 
@@ -85,11 +81,14 @@ function TeleportAndAttack(targetName)
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return end
     if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return end
+    
     local myHrp = char.HumanoidRootPart
     local targetHrp = target.Character.HumanoidRootPart
+    
     if not OriginalPosition then
         OriginalPosition = myHrp.CFrame
     end
+    
     local ammo = FindBlobman()
     if not ammo then
         SpawnBlobman()
@@ -97,6 +96,7 @@ function TeleportAndAttack(targetName)
         ammo = FindBlobman()
         if not ammo then return end
     end
+    
     if ammo and ammo:FindFirstChild("HumanoidRootPart") then
         for i = 1, 5 do
             ammo.HumanoidRootPart.CFrame = myHrp.CFrame * CFrame.new(0, 0, -2)
@@ -104,18 +104,23 @@ function TeleportAndAttack(targetName)
             RunService.RenderStepped:Wait()
         end
     end
+    
     myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 1)
     task.wait(0.01)
+    
     local bv = Instance.new("BodyAngularVelocity")
     bv.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
     bv.AngularVelocity = Vector3.new(500, 500, 500)
     bv.Parent = myHrp
+    
     if ammo and ammo:FindFirstChild("HumanoidRootPart") then
         ammo.HumanoidRootPart.CFrame = targetHrp.CFrame
         ammo.HumanoidRootPart.Velocity = (targetHrp.Position - myHrp.Position).Unit * 1000
     end
+    
     task.wait(0.05)
     bv:Destroy()
+    
     myHrp.CFrame = OriginalPosition
     myHrp.Velocity = Vector3.new(0,0,0)
     OriginalPosition = nil
@@ -127,10 +132,10 @@ ScreenGui.Name = "SyuHubUI"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game.CoreGui
 
--- メインフレーム（クールな黒デザイン）
+-- メインフレーム
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 320, 0, 280)
-MainFrame.Position = UDim2.new(0.5, -160, 0.3, 0)
+MainFrame.Size = UDim2.new(0, 350, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -175, 0.3, 0)
 MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
 MainFrame.BorderSizePixel = 1
 MainFrame.BorderColor3 = Color3.fromRGB(80, 80, 80)
@@ -154,7 +159,7 @@ TitleCorner.Parent = TitleBar
 local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -80, 1, 0)
 TitleLabel.Position = UDim2.new(0, 10, 0, 0)
-TitleLabel.Text = "Syu_hub v6.0"
+TitleLabel.Text = "Syu_hub v6.0 Fixed"
 TitleLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Font = Enum.Font.GothamBold
@@ -162,7 +167,7 @@ TitleLabel.TextSize = 18
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TitleBar
 
--- 最小化ボタン（3段階）
+-- 最小化ボタン
 local MinimizeBtn = Instance.new("TextButton")
 MinimizeBtn.Size = UDim2.new(0, 30, 0, 30)
 MinimizeBtn.Position = UDim2.new(1, -70, 0, 5)
@@ -192,73 +197,159 @@ local CloseCorner = Instance.new("UICorner")
 CloseCorner.CornerRadius = UDim.new(0, 8)
 CloseCorner.Parent = CloseBtn
 
--- コンテンツエリア
-local Content = Instance.new("Frame")
-Content.Size = UDim2.new(1, -20, 1, -50)
-Content.Position = UDim2.new(0, 10, 0, 45)
-Content.BackgroundTransparency = 1
-Content.Parent = MainFrame
+-- スクロール可能なコンテンツエリア
+local ScrollFrame = Instance.new("ScrollingFrame")
+ScrollFrame.Size = UDim2.new(1, -20, 1, -50)
+ScrollFrame.Position = UDim2.new(0, 10, 0, 45)
+ScrollFrame.BackgroundTransparency = 1
+ScrollFrame.BorderSizePixel = 0
+ScrollFrame.ScrollBarThickness = 6
+ScrollFrame.CanvasSize = UDim2.new(0, 0, 0, 500)
+ScrollFrame.Parent = MainFrame
 
--- プレイヤー選択ドロップダウン
+-- プレイヤー選択ラベル
 local PlayerLabel = Instance.new("TextLabel")
-PlayerLabel.Size = UDim2.new(1, 0, 0, 20)
+PlayerLabel.Size = UDim2.new(1, 0, 0, 25)
 PlayerLabel.Position = UDim2.new(0, 0, 0, 5)
 PlayerLabel.Text = "ターゲット選択:"
 PlayerLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
 PlayerLabel.BackgroundTransparency = 1
-PlayerLabel.Font = Enum.Font.Gotham
+PlayerLabel.Font = Enum.Font.GothamBold
 PlayerLabel.TextSize = 14
 PlayerLabel.TextXAlignment = Enum.TextXAlignment.Left
-PlayerLabel.Parent = Content
+PlayerLabel.Parent = ScrollFrame
 
+-- プレイヤー選択ドロップダウン
 local PlayerDropdown = Instance.new("TextButton")
-PlayerDropdown.Size = UDim2.new(1, 0, 0, 30)
-PlayerDropdown.Position = UDim2.new(0, 0, 0, 28)
-PlayerDropdown.Text = "プレイヤーを選択..."
+PlayerDropdown.Size = UDim2.new(1, 0, 0, 35)
+PlayerDropdown.Position = UDim2.new(0, 0, 0, 30)
+PlayerDropdown.Text = "▼ プレイヤーを選択..."
 PlayerDropdown.TextColor3 = Color3.new(1,1,1)
 PlayerDropdown.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 PlayerDropdown.Font = Enum.Font.Gotham
 PlayerDropdown.TextSize = 14
-PlayerDropdown.Parent = Content
+PlayerDropdown.Parent = ScrollFrame
 
 local DropdownCorner = Instance.new("UICorner")
 DropdownCorner.CornerRadius = UDim.new(0, 6)
 DropdownCorner.Parent = PlayerDropdown
 
--- ボタン作成ヘルパー
-local function CreateButton(text, position, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 30)
-    btn.Position = position
-    btn.Text = text
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 13
-    btn.Parent = Content
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 6)
-    corner.Parent = btn
-    btn.MouseButton1Click:Connect(callback)
-    return btn
+-- ドロップダウンメニュー（プレイヤーリスト）
+local DropdownMenu = Instance.new("Frame")
+DropdownMenu.Size = UDim2.new(1, 0, 0, 0)
+DropdownMenu.Position = UDim2.new(0, 0, 0, 65)
+DropdownMenu.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+DropdownMenu.BorderSizePixel = 1
+DropdownMenu.BorderColor3 = Color3.fromRGB(60, 60, 60)
+DropdownMenu.Visible = false
+DropdownMenu.ClipsDescendants = true
+DropdownMenu.Parent = ScrollFrame
+
+local MenuCorner = Instance.new("UICorner")
+MenuCorner.CornerRadius = UDim.new(0, 6)
+MenuCorner.Parent = DropdownMenu
+
+local MenuScroll = Instance.new("ScrollingFrame")
+MenuScroll.Size = UDim2.new(1, 0, 1, 0)
+MenuScroll.BackgroundTransparency = 1
+MenuScroll.BorderSizePixel = 0
+MenuScroll.ScrollBarThickness = 4
+MenuScroll.Parent = DropdownMenu
+
+local MenuLayout = Instance.new("UIListLayout")
+MenuLayout.SortOrder = Enum.SortOrder.LayoutOrder
+MenuLayout.Padding = UDim.new(0, 2)
+MenuLayout.Parent = MenuScroll
+
+-- プレイヤーリスト更新関数
+local function UpdatePlayerList()
+    for _, child in pairs(MenuScroll:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+    
+    local players = GetPlayerNames()
+    for i, playerName in ipairs(players) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -5, 0, 30)
+        btn.Text = playerName
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        btn.Font = Enum.Font.Gotham
+        btn.TextSize = 13
+        btn.Parent = MenuScroll
+        
+        btn.MouseButton1Click:Connect(function()
+            TargetPlayer = playerName
+            PlayerDropdown.Text = "✓ " .. playerName
+            DropdownMenu.Visible = false
+            SendNotif("Selected", "Target: " .. playerName)
+        end)
+    end
+    
+    MenuScroll.CanvasSize = UDim2.new(0, 0, 0, #players * 32)
 end
 
--- Kick ボタン
-CreateButton("Kick Target (Hit & Run)", UDim2.new(0, 0, 0, 65), function()
-    if TargetPlayer then
-        SendNotif("Kicking", "Attacking " .. TargetPlayer)
-        TeleportAndAttack(TargetPlayer)
+-- ドロップダウン開閉
+local dropdownOpen = false
+PlayerDropdown.MouseButton1Click:Connect(function()
+    dropdownOpen = not dropdownOpen
+    if dropdownOpen then
+        UpdatePlayerList()
+        DropdownMenu.Visible = true
+        DropdownMenu:TweenSize(UDim2.new(1, 0, 0, 150), "Out", "Quad", 0.2, true)
     else
-        SendNotif("Error", "プレイヤーを選択してください")
+        DropdownMenu:TweenSize(UDim2.new(1, 0, 0, 0), "Out", "Quad", 0.2, true, function()
+            DropdownMenu.Visible = false
+        end)
     end
 end)
 
--- Loop Kick トグル
-local LoopBtn = CreateButton("Loop Kick: OFF", UDim2.new(0, 0, 0, 100), function()
+-- ボタン作成関数
+local function CreateButton(text, position, callback, color)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 40)
+    btn.Position = position
+    btn.Text = text
+    btn.TextColor3 = Color3.new(1,1,1)
+    btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 55)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.Parent = ScrollFrame
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+    
+    btn.MouseButton1Click:Connect(callback)
+    
+    return btn
+end
+
+-- Kick Target ボタン
+local KickBtn = CreateButton("🎯 Kick Target (Hit & Run)", UDim2.new(0, 0, 0, 230), function()
+    if TargetPlayer then
+        SendNotif("Kicking", "Attacking " .. TargetPlayer)
+        task.spawn(function()
+            TeleportAndAttack(TargetPlayer)
+        end)
+    else
+        SendNotif("Error", "プレイヤーを選択してください")
+    end
+end, Color3.fromRGB(60, 80, 120))
+
+-- Loop Kick ボタン
+local LoopBtn = CreateButton("🔄 Loop Kick: OFF", UDim2.new(0, 0, 0, 280), function()
     IsLoopKicking = not IsLoopKicking
-    if IsLoopKicking and TargetPlayer then
-        LoopBtn.Text = "Loop Kick: ON"
-        LoopBtn.BackgroundColor3 = Color3.fromRGB(60, 100, 60)
+    if IsLoopKicking then
+        if not TargetPlayer then
+            SendNotif("Error", "プレイヤーを選択してください")
+            IsLoopKicking = false
+            return
+        end
+        LoopBtn.Text = "🔄 Loop Kick: ON"
+        LoopBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 60)
         SendNotif("Loop Kick", "Loop started for " .. TargetPlayer)
         task.spawn(function()
             while IsLoopKicking and TargetPlayer do
@@ -267,82 +358,81 @@ local LoopBtn = CreateButton("Loop Kick: OFF", UDim2.new(0, 0, 0, 100), function
             end
         end)
     else
-        IsLoopKicking = false
-        LoopBtn.Text = "Loop Kick: OFF"
+        LoopBtn.Text = "🔄 Loop Kick: OFF"
         LoopBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+        SendNotif("Stopped", "Loop Kick Stopped")
     end
-end)
+end, Color3.fromRGB(45, 45, 55))
 
 -- Kick ALL ボタン
-local KickAllBtn = CreateButton("Kick ALL: OFF", UDim2.new(0, 0, 0, 135), function()
-    IsLoopKicking = not IsLoopKicking
-    if IsLoopKicking then
-        KickAllBtn.Text = "Kick ALL: ON"
-        KickAllBtn.BackgroundColor3 = Color3.fromRGB(100, 40, 40)
+local KickAllBtn = CreateButton("💀 Kick ALL: OFF", UDim2.new(0, 0, 0, 330), function()
+    IsAllKicking = not IsAllKicking
+    IsLoopKicking = false
+    LoopBtn.Text = "🔄 Loop Kick: OFF"
+    LoopBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+    
+    if IsAllKicking then
+        KickAllBtn.Text = "💀 Kick ALL: ON"
+        KickAllBtn.BackgroundColor3 = Color3.fromRGB(120, 40, 40)
         SendNotif("ALL KICK", "Starting massacre...")
         task.spawn(function()
-            while IsLoopKicking do
+            while IsAllKicking do
                 for _, p in pairs(Players:GetPlayers()) do
-                    if p ~= LocalPlayer and IsLoopKicking then
+                    if p ~= LocalPlayer and IsAllKicking then
                         TeleportAndAttack(p.Name)
                         task.wait(0.2)
                     end
                 end
-                task.wait()
+                task.wait(0.1)
             end
         end)
     else
-        IsLoopKicking = false
-        KickAllBtn.Text = "Kick ALL: OFF"
+        KickAllBtn.Text = "💀 Kick ALL: OFF"
         KickAllBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-        SendNotif("Stopped", "All Kick Stopped.")
+        SendNotif("Stopped", "All Kick Stopped")
     end
-end)
+end, Color3.fromRGB(45, 45, 55))
 
 -- Spawn Blobman ボタン
-CreateButton("Force Spawn Blobman", UDim2.new(0, 0, 0, 170), function()
-    SpawnBlobman()
-end)
+CreateButton("🧊 Force Spawn Blobman", UDim2.new(0, 0, 0, 380), function()
+    SendNotif("Spawning", "Blobmanをスポーン中...")
+    task.spawn(function()
+        SpawnBlobman()
+    end)
+end, Color3.fromRGB(80, 60, 100))
 
--- リフレッシュボタン
-CreateButton("🔄 Refresh Player List", UDim2.new(0, 0, 0, 205), function()
-    SendNotif("Refreshed", "Player list updated.")
-end)
-
--- ドロップダウンクリック（シンプル版 - 最初のプレイヤーを選択）
-PlayerDropdown.MouseButton1Click:Connect(function()
-    local players = GetPlayerNames()
-    if #players > 0 then
-        TargetPlayer = players[1]
-        PlayerDropdown.Text = TargetPlayer
-        SendNotif("Selected", "Target: " .. TargetPlayer)
-    end
-end)
+-- Refresh ボタン
+CreateButton("🔄 Refresh Player List", UDim2.new(0, 0, 0, 430), function()
+    UpdatePlayerList()
+    SendNotif("Refreshed", "Player list updated")
+end, Color3.fromRGB(50, 90, 50))
 
 -- 3段階最小化
 MinimizeBtn.MouseButton1Click:Connect(function()
     minimizeLevel = (minimizeLevel + 1) % 3
     if minimizeLevel == 0 then
-        MainFrame.Size = UDim2.new(0, 320, 0, 280)
+        MainFrame.Size = UDim2.new(0, 350, 0, 400)
         MinimizeBtn.Text = "−"
-        Content.Visible = true
+        ScrollFrame.Visible = true
     elseif minimizeLevel == 1 then
-        MainFrame.Size = UDim2.new(0, 320, 0, 40)
+        MainFrame.Size = UDim2.new(0, 350, 0, 40)
         MinimizeBtn.Text = "■"
-        Content.Visible = false
+        ScrollFrame.Visible = false
     else
         MainFrame.Size = UDim2.new(0, 150, 0, 40)
         MinimizeBtn.Text = "☆"
-        Content.Visible = false
+        ScrollFrame.Visible = false
     end
 end)
 
 -- 閉じる
 CloseBtn.MouseButton1Click:Connect(function()
+    IsLoopKicking = false
+    IsAllKicking = false
     ScreenGui:Destroy()
 end)
 
--- メインUIドラッグ
+-- ドラッグ機能
 local dragging = false
 local dragInput, dragStart, startPos
 
@@ -373,5 +463,9 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
-SendNotif("Syu_hub", "v6.0 カスタムUI版 ロード完了!")
-print("Syu_hub v6.0 Ready to kick!")
+-- 初期化完了
+wait(0.5)
+SendNotif("Syu_hub", "v6.0 完全修正版ロード完了!")
+print("=== Syu_hub v6.0 Fixed Version ===")
+print("All buttons are now functional!")
+print("Ready to kick!")
